@@ -4,30 +4,8 @@
 
 Designed for Linux tiling window managers, VibeTune sits comfortably in a small terminal tile (or scales up to full screen) so you can browse your playlists, search the Spotify catalog, and control playback on your phone, earbuds, or smart speakers without ever picking up your phone or running a heavy desktop client.
 
-```text
-┌────────────────────────────────────── VibeTune ──────────────────────────────────────┐
-│ # Spectrum Visualizer                         │ Now Playing & Controls               │
-│                                     █   █     │  ▄▄▄▄▄▄▄▄▄▄▄▄▄   Resonance           │
-│                                   █ █ █ █ █   │  █ ▄▄▄   ▄▄▄ █   HOME                │
-│                       █         █ █ █ █ █ █ █ │  █ █ █   █ █ █   Odyssey (2014)      │
-│                   █ █ █ █ █   █ █ █ █ █ █ █ █ │  ▀▀▀▀▀▀▀▀▀▀▀▀▀   * Pixel 9 (Earbuds) │
-│               █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ │ [>] 01:42 ──────█────── 03:32        │
-│       █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ │ [s:ON]   [r:ALL]   [Vol: 75%]        │
-│   ▄ ▄ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ █ │ [p:<<]   [Space:||]   [n:>>]   [d]   │
-├──────────────────────────┬────────────────────┴──────────────────────────────────────┤
-│ [F1] Library             │ [F2] Tracklist: 80's Retro Wave                           │
-│                          │      (Press '/' to filter/search)                         │
-│ > Liked Songs       (48) │ #    Title                     Artist            Duration │
-│   80's Retro Wave  (590) │ ───────────────────────────────────────────────────────── │
-│   Reels playlist     (6) │ 1    Running in the Night      FM-84, Ollie W...    04:30 │
-│   2000s Bangla Un.  (64) │ 2   >Resonance                 HOME                 03:32 │
-│   * Die For You      (1) │ 3    Midnight City             M83                  04:03 │
-│   + Kaaktaal         (4) │ 4    Nightcall                 Kavinsky             04:19 │
-│   + Linkin Park      (2) │ 5    Tech Noir                 GUNSHIP              04:57 │
-├──────────────────────────┴───────────────────────────────────────────────────────────┤
-│ [Tab] Pane │ [Up/Dn] Select │ [Enter] Play │ [/] Search │ [Space] Pause │ [q] Quit   │
-└──────────────────────────────────────────────────────────────────────────────────────┘
-```
+<img width="1046" height="587" alt="Screenshot From 2026-10-14 04-06-48 (Edited)" src="https://github.com/user-attachments/assets/fdb6a5c8-ee80-4aa7-9e99-9528f48b2404" />
+
 
 ---
 
