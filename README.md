@@ -7,8 +7,6 @@ Designed for Linux tiling window managers, VibeTune sits comfortably in a small 
 <img width="1046" height="587" alt="Screenshot From 2026-10-14 04-06-48 (Edited)" src="https://github.com/user-attachments/assets/fdb6a5c8-ee80-4aa7-9e99-9528f48b2404" />
 
 
----
-
 ## Features
 
 - **Featherweight Spotify Connect Remote:** Controls playback on your phone, desktop, or smart speaker (Echo Dot, Sonos, etc.) via the Spotify Web API with zero local audio decoding overhead.
