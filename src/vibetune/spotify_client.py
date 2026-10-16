@@ -1,8 +1,7 @@
 """Spotify Web API wrapper and audio spectrum segment synthesizer for VibeTune.
 
-In non-tech terms:
 Think of this file as the "diplomat" or "remote control" between VibeTune and Spotify's
-cloud servers.
+cloud servers:
 - It logs you in securely using your Spotify Developer keys.
 - It asks Spotify: "What playlists does the user have?", "What song is playing?",
   or "What speakers are currently online?"
@@ -63,7 +62,6 @@ def _clean_str(val: str | None, default: str = "") -> str:
 def _parse_track(raw_track: dict[str, Any], context_uri: str | None = None) -> TrackItem | None:
     """Convert raw Spotify track data into a clean, simple TrackItem card.
     
-    Non-tech summary:
     Spotify sends back a giant, complicated packet of raw data for every song.
     This helper unpacks that packet and pulls out just the important bits:
     the song title, the artist names, album name, release year, and duration.
@@ -147,7 +145,6 @@ def _parse_pathfinder_track(entry: dict[str, Any], context_uri: str | None = Non
 class SpotifyClient:
     """Manages Spotify OAuth, remote device playback, library queries, and beat analysis.
     
-    Non-tech summary:
     This class is the master remote control. It handles:
     1. Authenticating: Opening your browser to log into Spotify the first time.
     2. Finding Devices: Spotting your phone, computer, or smart speakers on your network.
@@ -186,7 +183,6 @@ class SpotifyClient:
     def sp(self) -> spotipy.Spotify | None:
         """Get or initialize the authenticated Spotify connection.
         
-        Non-tech summary:
         Checks if we're already logged in. If not, reads your keys and opens
         your web browser to let you grant permission, then saves a temporary
         login pass (token) in `.spotify_cache` so you don't have to log in again.
@@ -227,7 +223,6 @@ class SpotifyClient:
     def ensure_device_id(self) -> str | None:
         """Return active Spotify Connect device_id, preferring active or phone devices.
         
-        Non-tech summary:
         Finds out which speaker or phone should play music. If your phone or smart
         speaker is already awake, it chooses that.
         """
@@ -301,7 +296,6 @@ class SpotifyClient:
     def get_playback_state(self) -> PlaybackState:
         """Fetch current Spotify playback state or fallback to idle device state.
         
-        Non-tech summary:
         Asks Spotify: 'What is playing right now?'
         Spotify responds with the current song name, how many seconds have elapsed,
         current volume, and whether shuffle or repeat is turned on.
@@ -482,7 +476,6 @@ class SpotifyClient:
     def get_library_items(self) -> list[LibraryItem]:
         """Fetch Liked Songs, saved Playlists, favorite Artists, and saved Albums for Pane 1.
         
-        Non-tech summary:
         This builds your left-hand menu. It asks Spotify for:
         1. Your 'Liked Songs' count.
         2. All your personal and followed playlists.
@@ -723,7 +716,6 @@ class SpotifyClient:
     ) -> Iterator[list[TrackItem]]:
         """Yield batches of TrackItems until the entire playlist/library item is loaded.
         
-        Non-tech summary:
         If a playlist has 500 songs, downloading all of them at once would freeze
         the screen for several seconds.
         Instead, this function acts like a conveyor belt: it delivers the first 50
@@ -852,7 +844,6 @@ class SpotifyClient:
     def search_tracks(self, query: str, limit: int = 20) -> list[TrackItem]:
         """Search the full Spotify catalog for tracks matching query (paginating in chunks of 10).
         
-        Non-tech summary:
         When you type a search term and press Enter, this function asks Spotify's
         global music library for songs matching your query and returns a list
         of track cards ready to display on screen.
@@ -889,7 +880,6 @@ class SpotifyClient:
     def get_audio_analysis(self, track_id: str, duration_ms: int = 210_000) -> tuple[float, list[AudioSegment]]:
         """Return (tempo_bpm, segments) using deterministic track-seeded beat & harmonic profile.
         
-        Non-tech summary:
         Calculates the speed (BPM = Beats Per Minute) and rhythm patterns of the song.
         This provides the musical 'pulse' that makes the frequency bars in the visualizer
         bounce in rhythm with the music.

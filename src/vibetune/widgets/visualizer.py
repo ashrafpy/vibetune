@@ -1,7 +1,6 @@
 """Real-time retro audio spectrum visualizer widget for the Top Deck.
 
-In non-tech terms:
-This file creates the dancing equalizer bars in the top-left corner of the screen.
+This file creates the dancing equalizer bars in the top-left corner of the screen:
 - Think of old-school stereo systems with flashing green light bars.
 - 20 times every second, it calculates how high each bar should jump based on the
   song's beat (tempo) and volume.
@@ -26,7 +25,6 @@ MAX_BANDS = 160
 class SpectrumVisualizer(Widget):
     """Non-focusable logarithmic spectrum visualizer that scales across any window/fullscreen width.
     
-    Non-tech summary:
     Draws the retro frequency bars and handles the physics of gravity and bounce
     so the animation looks fluid and natural.
     """
@@ -71,7 +69,6 @@ class SpectrumVisualizer(Widget):
     def advance_frame(self, dt: float) -> None:
         """Advance visualizer physics and bar smoothing at ~20 FPS.
         
-        Non-tech summary:
         Called 20 times a second. If a bar needs to jump up, it jumps quickly.
         If it needs to fall down, it drops smoothly with simulated gravity
         so it doesn't look jittery.

@@ -2,7 +2,6 @@
  ==============================================================================
  VibeTune TCSS (Terminal Cascading Style Sheet)
  ==============================================================================
- In non-tech terms:
  Think of this file like the interior decorating blueprint for VibeTune.
  It sets the dimensions of each room (visualizer width, sidebar width, etc.)
  and defines the retro colors:

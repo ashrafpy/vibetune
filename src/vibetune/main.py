@@ -1,6 +1,5 @@
 """CLI entry point for VibeTune.
 
-In non-tech terms:
 This is the "ignition key" of VibeTune. When you type `vibetune` in your
 terminal, this is the very first file that runs. It finds your Spotify
 credentials, sets up the connection, and opens the retro player screen.
