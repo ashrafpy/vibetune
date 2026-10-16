@@ -1,8 +1,24 @@
+/*
+ ==============================================================================
+ VibeTune TCSS (Terminal Cascading Style Sheet)
+ ==============================================================================
+ In non-tech terms:
+ Think of this file like the interior decorating blueprint for VibeTune.
+ It sets the dimensions of each room (visualizer width, sidebar width, etc.)
+ and defines the retro colors:
+ - Background: Pitch black (#121212)
+ - Accent: Spotify Green (#1DB954)
+ - Borders and Dividers: Subtle charcoal grey (#535353)
+ ==============================================================================
+*/
+
+/* The full terminal screen */
 Screen {
     background: #121212;
     color: #FFFFFF;
 }
 
+/* The outer border wrapping the entire application */
 #outer-frame {
     width: 100%;
     height: 100%;
@@ -13,6 +29,7 @@ Screen {
     background: #121212;
 }
 
+/* The upper floor (visualizer + now playing album art) */
 #top-deck {
     width: 100%;
     height: 10;
@@ -21,6 +38,7 @@ Screen {
     border-bottom: solid #535353;
 }
 
+/* Left side of upper floor: Frequency visualizer (54% width) */
 #visualizer-pane {
     width: 54%;
     height: 100%;
@@ -28,18 +46,21 @@ Screen {
     padding: 0 1;
 }
 
+/* Right side of upper floor: Album art, song name & scrub bar (46% width) */
 #now-playing-pane {
     width: 46%;
     height: 100%;
     padding: 0 1;
 }
 
+/* The lower floor (library menu + song table) */
 #bottom-deck {
     width: 100%;
     height: 1fr;
     border-bottom: solid #535353;
 }
 
+/* Left side of lower floor: Playlists & saved albums sidebar (30% width) */
 #library-pane {
     width: 30%;
     height: 100%;
@@ -47,17 +68,19 @@ Screen {
     padding: 0 1;
 }
 
+/* When the left sidebar is highlighted by the user, turn its border Spotify Green */
 #library-pane:focus {
     border-right: solid #1DB954;
 }
 
+/* Right side of lower floor: Song table & search bar (70% width) */
 #tracklist-pane {
     width: 70%;
     height: 100%;
     padding: 0 1;
 }
 
-/* footer strip */
+/* Bottom status strip showing keyboard shortcut cues */
 #retro-footer {
     width: 100%;
     height: 1;
@@ -65,7 +88,7 @@ Screen {
     color: #B3B3B3;
 }
 
-/* Device selector modal */
+/* The popup speaker/device selector window when you press 'd' */
 DeviceSelectorModal {
     align: center middle;
     background: #121212 75%;
