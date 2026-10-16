@@ -108,7 +108,8 @@ uv run --extra dev pytest -v
 vibetune/
 ├── .env.example                  # Environment variable template
 ├── pyproject.toml                # Project metadata & dependencies (uv / hatchling)
-├── spotify_tui_design_specification.md
+├── product_spec.md               # Product vision, user flows & functional specifications
+├── design.md                     # UI/TUI layout, keymap state machine & color tokens
 ├── src/vibetune/
 │   ├── app.py                    # Main Textual App, Device Modal & Input State Machine
 │   ├── main.py                   # CLI entry point (`vibetune`)

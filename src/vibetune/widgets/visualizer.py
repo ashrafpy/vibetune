@@ -1,4 +1,13 @@
-"""Real-time retro audio spectrum visualizer widget for the Top Deck."""
+"""Real-time retro audio spectrum visualizer widget for the Top Deck.
+
+In non-tech terms:
+This file creates the dancing equalizer bars in the top-left corner of the screen.
+- Think of old-school stereo systems with flashing green light bars.
+- 20 times every second, it calculates how high each bar should jump based on the
+  song's beat (tempo) and volume.
+- It uses 8 different Unicode text blocks (from a flat dash   to a full solid brick █)
+  to simulate smooth analog motion right inside your terminal!
+"""
 
 from __future__ import annotations
 
@@ -9,12 +18,18 @@ from textual.widget import Widget
 
 from vibetune.models import AudioSegment
 
+# Unicode block characters from lowest (1/8th height) to highest (full block)
 BLOCKS = (" ", "▂", "▃", "▄", "▅", "▆", "▇", "█")
 MAX_BANDS = 160
 
 
 class SpectrumVisualizer(Widget):
-    """Non-focusable logarithmic spectrum visualizer that scales across any window/fullscreen width."""
+    """Non-focusable logarithmic spectrum visualizer that scales across any window/fullscreen width.
+    
+    Non-tech summary:
+    Draws the retro frequency bars and handles the physics of gravity and bounce
+    so the animation looks fluid and natural.
+    """
 
     can_focus = False
 
@@ -24,14 +39,18 @@ class SpectrumVisualizer(Widget):
         self._tempo_bpm: float = 120.0
         self._progress_sec: float = 0.0
         self._segments: list[AudioSegment] = []
+        # Current height of each bar (0.0 = bottom, 1.0 = top)
         self._levels: list[float] = [0.05] * MAX_BANDS
+        # Highest point reached recently, used for floating peak indicators
         self._peaks: list[float] = [0.08] * MAX_BANDS
 
     def _active_band_count(self) -> int:
+        """Determines how many vertical bars can fit across the current terminal width."""
         width = max(16, self.size.width - 2)
         return max(12, min(MAX_BANDS, width // 2))
 
     def on_resize(self, event: events.Resize) -> None:
+        """Recalculate layout whenever you resize the terminal window."""
         self.refresh()
 
     def set_playback_context(
@@ -41,6 +60,7 @@ class SpectrumVisualizer(Widget):
         tempo_bpm: float = 120.0,
         segments: list[AudioSegment] | None = None,
     ) -> None:
+        """Update the visualizer with the latest song tempo, elapsed time, and beat maps."""
         self._is_playing = is_playing
         self._progress_sec = max(0.0, progress_ms / 1000.0)
         self._tempo_bpm = max(60.0, min(200.0, tempo_bpm or 120.0))
@@ -49,7 +69,13 @@ class SpectrumVisualizer(Widget):
         self.refresh()
 
     def advance_frame(self, dt: float) -> None:
-        """Advance visualizer physics and bar smoothing at ~20 FPS."""
+        """Advance visualizer physics and bar smoothing at ~20 FPS.
+        
+        Non-tech summary:
+        Called 20 times a second. If a bar needs to jump up, it jumps quickly.
+        If it needs to fall down, it drops smoothly with simulated gravity
+        so it doesn't look jittery.
+        """
         if self._is_playing:
             self._progress_sec += dt
 
@@ -60,8 +86,10 @@ class SpectrumVisualizer(Widget):
             target = target_levels[i]
             current = self._levels[i]
             if target > current:
+                # Rise quickly when a beat hits
                 self._levels[i] = current + (target - current) * min(1.0, dt * 16.0)
             else:
+                # Fall gently down like gravity
                 self._levels[i] = max(0.03, current - dt * 1.45)
 
             if self._levels[i] >= self._peaks[i]:
@@ -72,6 +100,7 @@ class SpectrumVisualizer(Widget):
         self.refresh()
 
     def _find_active_segment(self, t_sec: float) -> AudioSegment | None:
+        """Binary search to find the audio slice matching the current playback second."""
         if not self._segments:
             return None
         lo, hi = 0, len(self._segments) - 1
@@ -87,6 +116,7 @@ class SpectrumVisualizer(Widget):
         return self._segments[min(len(self._segments) - 1, max(0, lo))]
 
     def _compute_targets(self, num_bands: int, t_sec: float) -> list[float]:
+        """Calculate target bar heights by combining bass pulse, harmonic wave, and loudness."""
         if not self._is_playing:
             return [0.04] * num_bands
 
@@ -121,6 +151,7 @@ class SpectrumVisualizer(Widget):
         return targets
 
     def render(self) -> Text:
+        """Renders the 2D grid of frequency bars in Spotify Green gradient colors."""
         height = max(4, self.size.height)
         chart_rows = max(2, height - 1)
         num_bands = self._active_band_count()
@@ -146,6 +177,7 @@ class SpectrumVisualizer(Widget):
                     glyph_idx = max(1, min(7, int(frac * 8)))
                     glyph = BLOCKS[glyph_idx]
 
+                # Gradient color: bright neon green at peaks, rich emerald green at base
                 if row_from_bottom >= chart_rows - 1 and glyph != " ":
                     color = "#45F082"
                 elif row_from_bottom >= chart_rows // 2:

@@ -1,4 +1,14 @@
-"""Now Playing & Controls dashboard widget with responsive high-res 2x3 Sextant album art."""
+"""Now Playing & Controls dashboard widget with responsive high-res 2x3 Sextant album art.
+
+In non-tech terms:
+This file builds the top-right corner of VibeTune:
+- It downloads the album cover picture from Spotify and performs a clever trick:
+  terminals usually can only show text letters, but this code cuts each character
+  cell into 6 tiny subpixels (2 wide by 3 tall) using special Unicode 'Sextant'
+  characters. This lets it paint full-color album covers in your terminal!
+- It also displays the song title, artist, album name, year, and volume.
+- It draws the timeline bar (progress bar) that moves forward as the song plays.
+"""
 
 from __future__ import annotations
 
@@ -27,6 +37,7 @@ ART_CELL_ROWS = WIDE_ART_ROWS
 
 
 def _build_sextant_table() -> tuple[str, ...]:
+    """Precompute the 64 Unicode Sextant characters (U+1FB00 to U+1FB3B)."""
     table: list[str] = []
     code = 0x1FB00
     for mask in range(64):
@@ -49,6 +60,7 @@ SEXTANT_CHARS = _build_sextant_table()
 
 
 def _fit_cell(text: str, width: int) -> str:
+    """Trim or pad text to fit exact character width in the terminal."""
     clean = " ".join(text.replace("\xa0", " ").splitlines())
     if width <= 0:
         return ""

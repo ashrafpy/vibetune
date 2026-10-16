@@ -1,4 +1,15 @@
-"""Spotify Web API wrapper and audio spectrum segment synthesizer for VibeTune."""
+"""Spotify Web API wrapper and audio spectrum segment synthesizer for VibeTune.
+
+In non-tech terms:
+Think of this file as the "diplomat" or "remote control" between VibeTune and Spotify's
+cloud servers.
+- It logs you in securely using your Spotify Developer keys.
+- It asks Spotify: "What playlists does the user have?", "What song is playing?",
+  or "What speakers are currently online?"
+- When you press Spacebar or 'n', this file calls Spotify to say: "Please pause the
+  living room speaker" or "Skip to the next song."
+- It also breaks down songs into beat patterns so the music visualizer can bounce.
+"""
 
 from __future__ import annotations
 
@@ -22,9 +33,11 @@ from spotipy.oauth2 import CacheFileHandler, SpotifyOAuth
 
 from vibetune.models import AudioSegment, LibraryItem, PlaybackState, TrackItem
 
+# Silence chatty network logging so terminal output stays clean and readable
 logging.getLogger("spotipy").setLevel(logging.CRITICAL)
 logging.getLogger("urllib3").setLevel(logging.CRITICAL)
 
+# Permissions VibeTune asks from Spotify (reading your library and controlling playback)
 SCOPES = " ".join(
     [
         "user-read-playback-state",
@@ -41,13 +54,20 @@ PLAYLIST_CONTENTS_HASH = "cd2275433b29f7316176e7b5b5e098ae7744724e1a52d63549c766
 
 
 def _clean_str(val: str | None, default: str = "") -> str:
+    """Clean up messy text by removing extra spaces, line breaks, and hidden characters."""
     if not val:
         return default
     return " ".join(val.replace("\xa0", " ").splitlines()).strip() or default
 
 
 def _parse_track(raw_track: dict[str, Any], context_uri: str | None = None) -> TrackItem | None:
-    """Convert a raw Spotipy track object into a TrackItem."""
+    """Convert raw Spotify track data into a clean, simple TrackItem card.
+    
+    Non-tech summary:
+    Spotify sends back a giant, complicated packet of raw data for every song.
+    This helper unpacks that packet and pulls out just the important bits:
+    the song title, the artist names, album name, release year, and duration.
+    """
     if not raw_track or not isinstance(raw_track, dict) or not raw_track.get("id"):
         return None
 
@@ -125,9 +145,18 @@ def _parse_pathfinder_track(entry: dict[str, Any], context_uri: str | None = Non
 
 
 class SpotifyClient:
-    """Manages Spotify OAuth, remote device playback, library queries, and beat analysis."""
+    """Manages Spotify OAuth, remote device playback, library queries, and beat analysis.
+    
+    Non-tech summary:
+    This class is the master remote control. It handles:
+    1. Authenticating: Opening your browser to log into Spotify the first time.
+    2. Finding Devices: Spotting your phone, computer, or smart speakers on your network.
+    3. Controlling Music: Sending Play, Pause, Next, and Volume signals over the internet.
+    4. Fetching Songs: Downloading your playlists and album details in smooth background batches.
+    """
 
     def __init__(self, env_path: Path | None = None, sp_client: spotipy.Spotify | None = None) -> None:
+        # Load your Spotify credentials (Client ID and Secret) from .env.local
         self._load_env(env_path)
         self._sp: spotipy.Spotify | None = sp_client
         self._sp_lock = threading.Lock()
@@ -137,6 +166,7 @@ class SpotifyClient:
         self.auth_error: str | None = None
 
     def _load_env(self, env_path: Path | None = None) -> None:
+        """Search the disk for the .env.local or .env file containing Spotify keys."""
         candidates = []
         if env_path:
             candidates.append(env_path)
@@ -154,6 +184,13 @@ class SpotifyClient:
 
     @property
     def sp(self) -> spotipy.Spotify | None:
+        """Get or initialize the authenticated Spotify connection.
+        
+        Non-tech summary:
+        Checks if we're already logged in. If not, reads your keys and opens
+        your web browser to let you grant permission, then saves a temporary
+        login pass (token) in `.spotify_cache` so you don't have to log in again.
+        """
         if self._sp is not None:
             return self._sp
 
@@ -188,7 +225,12 @@ class SpotifyClient:
                 return None
 
     def ensure_device_id(self) -> str | None:
-        """Return active Spotify Connect device_id, preferring active or phone devices."""
+        """Return active Spotify Connect device_id, preferring active or phone devices.
+        
+        Non-tech summary:
+        Finds out which speaker or phone should play music. If your phone or smart
+        speaker is already awake, it chooses that.
+        """
         if not self.sp:
             return None
         try:
@@ -217,7 +259,7 @@ class SpotifyClient:
             return self._last_device_id
 
     def get_devices(self) -> list[dict[str, Any]]:
-        """Return list of available Spotify Connect devices."""
+        """Return list of available Spotify Connect devices (speakers, phones, computers)."""
         if not self.sp:
             return []
         try:
@@ -228,7 +270,7 @@ class SpotifyClient:
             return []
 
     def transfer_to_device(self, device_id: str, device_name: str = "Spotify Device") -> bool:
-        """Transfer active playback to the specified Spotify Connect device."""
+        """Transfer active playback to the specified Spotify Connect device (e.g. switch to Echo Dot)."""
         if not self.sp or not device_id:
             return False
         self._last_device_id = device_id
@@ -257,7 +299,13 @@ class SpotifyClient:
         return self._last_device_name
 
     def get_playback_state(self) -> PlaybackState:
-        """Fetch current Spotify playback state or fallback to idle device state."""
+        """Fetch current Spotify playback state or fallback to idle device state.
+        
+        Non-tech summary:
+        Asks Spotify: 'What is playing right now?'
+        Spotify responds with the current song name, how many seconds have elapsed,
+        current volume, and whether shuffle or repeat is turned on.
+        """
         if not self.sp:
             return PlaybackState(device_name=self.auth_error or "Offline")
 
@@ -309,7 +357,7 @@ class SpotifyClient:
             )
 
     def toggle_play_pause(self, state: PlaybackState) -> bool:
-        """Toggle playback between play and pause on the active/remote device."""
+        """Toggle playback between play and pause on the active/remote device (Spacebar)."""
         if not self.sp:
             return state.is_playing
         dev_id = state.device_id or self.ensure_device_id()
@@ -324,6 +372,7 @@ class SpotifyClient:
             return state.is_playing
 
     def next_track(self, device_id: str | None = None) -> None:
+        """Skip to the next song on Spotify ('n' key)."""
         if not self.sp:
             return
         try:
@@ -332,6 +381,7 @@ class SpotifyClient:
             pass
 
     def previous_track(self, device_id: str | None = None) -> None:
+        """Skip backward to the previous song or beginning of current song ('p' key)."""
         if not self.sp:
             return
         try:
@@ -340,6 +390,7 @@ class SpotifyClient:
             pass
 
     def seek_relative(self, current_ms: int, delta_ms: int, duration_ms: int, device_id: str | None = None) -> int:
+        """Jump 5 seconds forward or backward in the current song (Left/Right arrow keys)."""
         target_ms = max(0, min(duration_ms or 300_000, current_ms + delta_ms))
         if not self.sp:
             return target_ms
@@ -350,6 +401,7 @@ class SpotifyClient:
         return target_ms
 
     def adjust_volume(self, current_vol: int, delta: int, device_id: str | None = None) -> int:
+        """Raise or lower speaker volume by 5% ('+' and '-' keys)."""
         target_vol = max(0, min(100, current_vol + delta))
         if not self.sp:
             return target_vol
@@ -360,6 +412,7 @@ class SpotifyClient:
         return target_vol
 
     def toggle_shuffle(self, current_shuffle: bool, device_id: str | None = None) -> bool:
+        """Turn shuffle mode on or off ('s' key)."""
         new_shuffle = not current_shuffle
         if not self.sp:
             return new_shuffle
@@ -370,6 +423,7 @@ class SpotifyClient:
         return new_shuffle
 
     def cycle_repeat(self, current_repeat: str, device_id: str | None = None) -> str:
+        """Cycle repeat mode: OFF -> Repeat All -> Repeat One Song ('r' key)."""
         order = ["off", "context", "track"]
         try:
             next_idx = (order.index(current_repeat) + 1) % len(order)
@@ -426,7 +480,15 @@ class SpotifyClient:
             pass
 
     def get_library_items(self) -> list[LibraryItem]:
-        """Fetch Liked Songs, saved Playlists, favorite Artists, and saved Albums for Pane 1."""
+        """Fetch Liked Songs, saved Playlists, favorite Artists, and saved Albums for Pane 1.
+        
+        Non-tech summary:
+        This builds your left-hand menu. It asks Spotify for:
+        1. Your 'Liked Songs' count.
+        2. All your personal and followed playlists.
+        3. Your saved albums (marked with ◉).
+        4. Artists you listen to most frequently (marked with ♪).
+        """
         if not self.sp:
             return []
 
@@ -659,7 +721,15 @@ class SpotifyClient:
         item: LibraryItem,
         batch_size: int = 50,
     ) -> Iterator[list[TrackItem]]:
-        """Yield batches of TrackItems until the entire playlist/library item is loaded."""
+        """Yield batches of TrackItems until the entire playlist/library item is loaded.
+        
+        Non-tech summary:
+        If a playlist has 500 songs, downloading all of them at once would freeze
+        the screen for several seconds.
+        Instead, this function acts like a conveyor belt: it delivers the first 50
+        songs right away so you can start browsing and playing, then quietly delivers
+        the next 50 in the background.
+        """
         if not self.sp:
             return
 
@@ -780,7 +850,13 @@ class SpotifyClient:
         return all_tracks
 
     def search_tracks(self, query: str, limit: int = 20) -> list[TrackItem]:
-        """Search the full Spotify catalog for tracks matching query (paginating in chunks of 10)."""
+        """Search the full Spotify catalog for tracks matching query (paginating in chunks of 10).
+        
+        Non-tech summary:
+        When you type a search term and press Enter, this function asks Spotify's
+        global music library for songs matching your query and returns a list
+        of track cards ready to display on screen.
+        """
         if not self.sp or not query.strip():
             return []
         tracks: list[TrackItem] = []
@@ -811,7 +887,13 @@ class SpotifyClient:
         return tracks
 
     def get_audio_analysis(self, track_id: str, duration_ms: int = 210_000) -> tuple[float, list[AudioSegment]]:
-        """Return (tempo_bpm, segments) using deterministic track-seeded beat & harmonic profile."""
+        """Return (tempo_bpm, segments) using deterministic track-seeded beat & harmonic profile.
+        
+        Non-tech summary:
+        Calculates the speed (BPM = Beats Per Minute) and rhythm patterns of the song.
+        This provides the musical 'pulse' that makes the frequency bars in the visualizer
+        bounce in rhythm with the music.
+        """
         if track_id in self._analysis_cache:
             return self._analysis_cache[track_id]
 

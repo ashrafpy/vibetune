@@ -1,4 +1,14 @@
-"""Main Textual TUI Application for VibeTune (Terminal Spotify Remote)."""
+"""Main Textual TUI Application for VibeTune (Terminal Spotify Remote).
+
+In non-tech terms:
+This file is the "conductor of the orchestra" for the visual screen.
+- It builds the layout: splits your terminal into the top stage (visualizer and
+  album cover) and the bottom stage (library list and song table).
+- It listens for your keyboard presses (like pressing Space to pause or 'd' to
+  switch speakers).
+- It runs a heartbeat timer that refreshes the song progress bar every second.
+- It pops up the speaker selection window when you press 'd'.
+"""
 
 from __future__ import annotations
 
@@ -23,6 +33,7 @@ from vibetune.widgets.visualizer import SpectrumVisualizer
 
 
 def _fit_cell(text: str, width: int) -> str:
+    """Trim text with an ellipsis (…) so it fits neatly into terminal columns without wrapping."""
     clean = " ".join(text.replace("\xa0", " ").splitlines())
     if width <= 0:
         return ""
@@ -34,7 +45,12 @@ def _fit_cell(text: str, width: int) -> str:
 
 
 class DeviceSelectorWidget(Widget):
-    """Interactive list widget inside the DeviceSelectorModal."""
+    """Interactive list widget inside the DeviceSelectorModal.
+    
+    Non-tech summary:
+    This draws the menu of your speakers, phones, and computers on screen,
+    letting you use the Up/Down arrow keys to highlight the one you want.
+    """
 
     can_focus = True
 
@@ -119,7 +135,12 @@ class DeviceSelectorWidget(Widget):
 
 
 class DeviceSelectorModal(ModalScreen[dict[str, Any] | None]):
-    """Retro modal dialog to pick the active Spotify Connect device."""
+    """Retro modal dialog to pick the active Spotify Connect device.
+    
+    Non-tech summary:
+    When you press 'd', this popup box appears in front of the player,
+    listing all your speakers and phones. Selecting one transfers the music there!
+    """
 
     def __init__(
         self,
@@ -174,7 +195,12 @@ class DeviceSelectorModal(ModalScreen[dict[str, Any] | None]):
 
 
 class RetroFooter(Widget):
-    """Single-row persistent keybinding legend and status indicator."""
+    """Single-row persistent keybinding legend and status indicator.
+    
+    Non-tech summary:
+    This is the bottom strip that always shows you which keyboard keys do what
+    (e.g., Space to pause, Tab to switch sides, / to search).
+    """
 
     can_focus = False
 
@@ -232,7 +258,12 @@ class RetroFooter(Widget):
 
 
 class VibeTuneApp(App[None]):
-    """Retro 2-Deck Terminal Spotify Remote Player."""
+    """Retro 2-Deck Terminal Spotify Remote Player.
+    
+    Non-tech summary:
+    The master app window: organizes the visual components, sets the green & black
+    retro theme, listens for your keystrokes, and updates playback state.
+    """
 
     CSS_PATH = "styles.tcss"
     ENABLE_COMMAND_PALETTE = False
@@ -255,6 +286,16 @@ class VibeTuneApp(App[None]):
         self._user_target_volume: int | None = None
 
     def compose(self) -> ComposeResult:
+        """Build the visual layout of the retro player.
+        
+        Non-tech summary:
+        This builds the 4 main rooms on screen:
+        1. Top-left: The bouncing music visualizer.
+        2. Top-right: Album art cover, song name, and progress bar.
+        3. Bottom-left: Your playlists and saved albums list.
+        4. Bottom-right: The table of songs and search bar.
+        5. Bottom strip: Keyboard shortcuts cheat sheet.
+        """
         with Vertical(id="outer-frame") as frame:
             frame.border_title = "VibeTune"
             with Horizontal(id="top-deck"):
@@ -286,6 +327,12 @@ class VibeTuneApp(App[None]):
         return self.query_one("#retro-footer", RetroFooter)
 
     async def on_mount(self) -> None:
+        """Called automatically right after the window opens on screen.
+        
+        Starts two clocks:
+        1. A fast 20 FPS clock (every 0.05s) to animate the visualizer and smooth the scrub bar.
+        2. A slower clock (every 2.0s) to ask Spotify if the song changed.
+        """
         self.library_pane.focus()
         # 20 FPS timer for visualizer & smooth progress bar interpolation
         self.set_interval(0.05, self._on_animation_tick)
@@ -298,6 +345,7 @@ class VibeTuneApp(App[None]):
         self._suppress_poll_until = time.monotonic() + cooldown_sec
 
     def _on_animation_tick(self) -> None:
+        """Advances visualizer animation frames 20 times per second."""
         if not self.is_mounted:
             return
         try:
@@ -307,6 +355,7 @@ class VibeTuneApp(App[None]):
             pass
 
     async def _initial_load(self) -> None:
+        """Fetch playlists and current song immediately upon starting up."""
         await self._load_library()
         await self._refresh_playback_state(force=True)
 
@@ -316,6 +365,7 @@ class VibeTuneApp(App[None]):
         self.run_worker(self._refresh_playback_state(force=False), exclusive=False)
 
     async def _refresh_playback_state(self, force: bool = False) -> None:
+        """Ask Spotify for current track & progress, then update the screen."""
         if not force and time.monotonic() < self._suppress_poll_until:
             return
         state = await asyncio.to_thread(self.spotify.get_playback_state)
@@ -447,6 +497,13 @@ class VibeTuneApp(App[None]):
             self._handle_normal_mode_key(event)
 
     def _handle_search_mode_key(self, event: events.Key) -> None:
+        """Handle keyboard typing when in Search Mode ('/' key active).
+        
+        Non-tech summary:
+        When searching, typing letters (a-z, space) narrows down songs in real time.
+        Pressing Enter searches Spotify's entire catalog or plays the song.
+        Pressing Escape cancels the search and brings back your previous playlist.
+        """
         key = event.key
         event.stop()
         event.prevent_default()
@@ -477,6 +534,18 @@ class VibeTuneApp(App[None]):
             self.tracklist_pane.append_search_char(event.character)
 
     def _handle_normal_mode_key(self, event: events.Key) -> None:
+        """Handle standard hotkeys for browsing and media playback.
+        
+        Non-tech summary:
+        - Tab / F1 / F2: Switch between the playlist menu and the song table.
+        - Up / Down: Move up and down the list.
+        - Space: Play or pause immediately.
+        - n / p: Skip forward or backward.
+        - s / r: Toggle shuffle or repeat.
+        - + / -: Turn volume up or down.
+        - d: Pop up the speaker selector.
+        - q: Quit the application.
+        """
         key = event.key
         char = event.character
 
