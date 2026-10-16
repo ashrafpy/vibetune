@@ -1,7 +1,6 @@
 """Pane 2: Tracklist & Inline Header Search widget ([F2] Tracklist).
 
-In non-tech terms:
-This is the main song table on the right side of the screen.
+This is the main song table on the right side of the screen:
 - It lists all the songs in the currently selected playlist with columns for
   track number, song title, artist, and duration.
 - It keeps foreign characters (like Japanese, Korean, Arabic, or Bengali) neatly
@@ -28,7 +27,6 @@ from vibetune.models import TrackItem
 def _fit_cell(text: str, width: int) -> str:
     """Pad or truncate `text` to exact terminal display cell `width` (handles CJK & wide glyphs).
     
-    Non-tech summary:
     In terminals, characters like Japanese kanji or emojis take up two spaces instead
     of one. This function measures the real visual space on screen to make sure
     columns remain perfectly straight and never wrap around to ruin the layout.
@@ -46,7 +44,6 @@ def _fit_cell(text: str, width: int) -> str:
 class TracklistPane(Widget):
     """Focusable right-hand tracklist table with inline header search.
     
-    Non-tech summary:
     Manages the song table, scrolling, live searching, and track selection.
     """
 

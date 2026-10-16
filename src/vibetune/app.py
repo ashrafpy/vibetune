@@ -1,7 +1,6 @@
 """Main Textual TUI Application for VibeTune (Terminal Spotify Remote).
 
-In non-tech terms:
-This file is the "conductor of the orchestra" for the visual screen.
+This file is the "conductor of the orchestra" for the visual screen:
 - It builds the layout: splits your terminal into the top stage (visualizer and
   album cover) and the bottom stage (library list and song table).
 - It listens for your keyboard presses (like pressing Space to pause or 'd' to
@@ -47,7 +46,6 @@ def _fit_cell(text: str, width: int) -> str:
 class DeviceSelectorWidget(Widget):
     """Interactive list widget inside the DeviceSelectorModal.
     
-    Non-tech summary:
     This draws the menu of your speakers, phones, and computers on screen,
     letting you use the Up/Down arrow keys to highlight the one you want.
     """
@@ -137,7 +135,6 @@ class DeviceSelectorWidget(Widget):
 class DeviceSelectorModal(ModalScreen[dict[str, Any] | None]):
     """Retro modal dialog to pick the active Spotify Connect device.
     
-    Non-tech summary:
     When you press 'd', this popup box appears in front of the player,
     listing all your speakers and phones. Selecting one transfers the music there!
     """
@@ -197,7 +194,6 @@ class DeviceSelectorModal(ModalScreen[dict[str, Any] | None]):
 class RetroFooter(Widget):
     """Single-row persistent keybinding legend and status indicator.
     
-    Non-tech summary:
     This is the bottom strip that always shows you which keyboard keys do what
     (e.g., Space to pause, Tab to switch sides, / to search).
     """
@@ -260,7 +256,6 @@ class RetroFooter(Widget):
 class VibeTuneApp(App[None]):
     """Retro 2-Deck Terminal Spotify Remote Player.
     
-    Non-tech summary:
     The master app window: organizes the visual components, sets the green & black
     retro theme, listens for your keystrokes, and updates playback state.
     """
@@ -288,7 +283,6 @@ class VibeTuneApp(App[None]):
     def compose(self) -> ComposeResult:
         """Build the visual layout of the retro player.
         
-        Non-tech summary:
         This builds the 4 main rooms on screen:
         1. Top-left: The bouncing music visualizer.
         2. Top-right: Album art cover, song name, and progress bar.
@@ -499,7 +493,6 @@ class VibeTuneApp(App[None]):
     def _handle_search_mode_key(self, event: events.Key) -> None:
         """Handle keyboard typing when in Search Mode ('/' key active).
         
-        Non-tech summary:
         When searching, typing letters (a-z, space) narrows down songs in real time.
         Pressing Enter searches Spotify's entire catalog or plays the song.
         Pressing Escape cancels the search and brings back your previous playlist.
@@ -536,7 +529,6 @@ class VibeTuneApp(App[None]):
     def _handle_normal_mode_key(self, event: events.Key) -> None:
         """Handle standard hotkeys for browsing and media playback.
         
-        Non-tech summary:
         - Tab / F1 / F2: Switch between the playlist menu and the song table.
         - Up / Down: Move up and down the list.
         - Space: Play or pause immediately.

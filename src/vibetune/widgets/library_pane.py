@@ -1,7 +1,6 @@
 """Pane 1: Library navigation widget ([F1] Library).
 
-In non-tech terms:
-This is the left-hand menu of VibeTune.
+This is the left-hand menu of VibeTune:
 - It displays a vertical list of your music folders: "Liked Songs", your playlists,
   saved albums (marked with ◉), and favorite artists (marked with ♪).
 - When you use the Up/Down arrow keys and hit Enter, it tells the rest of the app
@@ -35,7 +34,6 @@ def _fit_cell(text: str, width: int) -> str:
 class LibraryPane(Widget):
     """Focusable left-hand library navigation pane listing Liked Songs, Playlists, and Albums.
     
-    Non-tech summary:
     Manages the highlighted row in the sidebar, scrolling automatically if you have
     more playlists than can fit on screen at once.
     """

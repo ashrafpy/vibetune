@@ -1,6 +1,5 @@
 """Now Playing & Controls dashboard widget with responsive high-res 2x3 Sextant album art.
 
-In non-tech terms:
 This file builds the top-right corner of VibeTune:
 - It downloads the album cover picture from Spotify and performs a clever trick:
   terminals usually can only show text letters, but this code cuts each character

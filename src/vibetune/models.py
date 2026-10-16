@@ -1,6 +1,5 @@
 """Data models for VibeTune playback, library items, and tracks.
 
-In non-tech terms:
 Think of this file as a collection of standardized digital index cards.
 Instead of passing messy bundles of raw Spotify data around the app, we organize
 everything into neat, predictable cards:
@@ -20,7 +19,6 @@ from dataclasses import dataclass, field
 class TrackItem:
     """Represents a single Spotify track in a tracklist or search result.
     
-    Non-tech summary:
     This card stores all the essential details about one song so VibeTune can
     display it in the song table and show its album cover.
     """
@@ -47,7 +45,6 @@ class TrackItem:
 class LibraryItem:
     """Represents a library entry in Pane 1 (Liked Songs, Playlist, or Album).
     
-    Non-tech summary:
     This represents an item in your left-hand sidebar menu, such as a playlist
     or your saved albums collection.
     """
@@ -63,7 +60,6 @@ class LibraryItem:
 class AudioSegment:
     """Represents a time slice from Spotify's audio-analysis or synthesized beat map.
     
-    Non-tech summary:
     Music is broken down into split-second slices. Each slice tells us how loud
     the music is and which musical pitches are hitting, so our retro visualizer
     can dance accurately to the beat.
@@ -79,7 +75,6 @@ class AudioSegment:
 class PlaybackState:
     """Snapshot of the active Spotify Connect playback status.
     
-    Non-tech summary:
     This is the live scoreboard of your music player. Every couple of seconds,
     VibeTune updates this board to know if the song is paused, what time it is at,
     and which speaker the sound is coming out of.
