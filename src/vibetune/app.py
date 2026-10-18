@@ -345,13 +345,15 @@ class VibeTuneApp(App[None]):
         try:
             self.visualizer.advance_frame(0.05)
             self.now_playing.advance_progress(50)
-        except Exception:
+        except (AttributeError, TypeError):
             pass
 
     async def _initial_load(self) -> None:
-        """Fetch playlists and current song immediately upon starting up."""
-        await self._load_library()
-        await self._refresh_playback_state(force=True)
+        """Fetch playlists and current song concurrently on startup."""
+        await asyncio.gather(
+            self._load_library(),
+            self._refresh_playback_state(force=True),
+        )
 
     def _poll_playback_worker(self) -> None:
         if time.monotonic() < self._suppress_poll_until:
@@ -395,7 +397,7 @@ class VibeTuneApp(App[None]):
                 tempo_bpm=state.tempo_bpm,
                 segments=segments,
             )
-        except Exception:
+        except (AttributeError, TypeError, KeyError):
             pass
 
     async def _load_library(self) -> None:

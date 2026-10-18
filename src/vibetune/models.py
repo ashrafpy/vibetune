@@ -13,6 +13,7 @@ everything into neat, predictable cards:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 
 @dataclass
@@ -35,9 +36,12 @@ class TrackItem:
 
     @property
     def duration_formatted(self) -> str:
-        """Converts raw milliseconds into a friendly 'MM:SS' time format (like '03:45')."""
+        """Converts raw milliseconds into a friendly time format ('MM:SS' or 'H:MM:SS')."""
         total_seconds = max(0, self.duration_ms // 1000)
-        minutes, seconds = divmod(total_seconds, 60)
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours > 0:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
         return f"{minutes:02d}:{seconds:02d}"
 
 
@@ -51,7 +55,7 @@ class LibraryItem:
 
     id: str             # Unique ID for the playlist or album
     name: str           # Display name (e.g., 'Discover Weekly' or 'Daily Mix 1')
-    item_type: str      # Category: 'liked', 'playlist', or 'album'
+    item_type: Literal["liked", "playlist", "album", "artist"]  # Category of library entry
     track_count: int    # Total number of songs inside this collection
     uri: str | None = None  # Spotify URI for loading the collection
 
@@ -85,11 +89,10 @@ class PlaybackState:
     progress_ms: int = 0                 # How far into the song we are, in milliseconds
     volume_percent: int = 75             # Current volume from 0% (mute) to 100% (max)
     shuffle_state: bool = False          # True if shuffle is turned on
-    repeat_state: str = "off"            # Repeat mode: 'off', 'context' (loop all), or 'track' (loop one)
+    repeat_state: Literal["off", "context", "track"] = "off"  # Repeat mode: 'off', 'context' (loop all), or 'track' (loop one)
     device_id: str | None = None         # ID of the speaker/phone currently playing
     device_name: str = "No Active Device"# Human-friendly name of the speaker/phone
     tempo_bpm: float = 120.0             # Speed of the song in beats per minute
-    energy: float = 0.72                 # Spotify energy rating from 0.0 (calm) to 1.0 (energetic)
 
     @property
     def repeat_label(self) -> str:

@@ -10,7 +10,7 @@ import pytest
 from vibetune.app import DeviceSelectorModal, VibeTuneApp
 from vibetune.models import LibraryItem, PlaybackState, TrackItem
 from vibetune.spotify_client import SpotifyClient
-from vibetune.widgets.now_playing import render_halfblock_art
+from vibetune.widgets.now_playing import render_sextant_art
 
 
 class FakeSpotifyClient(SpotifyClient):
@@ -173,11 +173,11 @@ class FakeSpotifyClient(SpotifyClient):
         self.state.progress_ms = 0
 
 
-def test_halfblock_album_art_renderer() -> None:
+def test_sextant_album_art_renderer() -> None:
     img = Image.new("RGB", (64, 64), color=(29, 185, 84))
     buf = BytesIO()
     img.save(buf, format="PNG")
-    rows = render_halfblock_art(buf.getvalue(), width=14, height_rows=7)
+    rows = render_sextant_art(buf.getvalue(), width=14, height_rows=7)
     assert len(rows) == 7
     for row in rows:
         assert len(row.plain) == 14
@@ -288,3 +288,155 @@ async def test_search_mode_live_filter_and_catalog_search() -> None:
         assert app.search_mode is False
         assert len(fake_client.played_tracks) == 1
         assert fake_client.played_tracks[0].title == "Instant Crush"
+
+def test_hour_long_track_duration_format() -> None:
+    """TrackItem.duration_formatted handles hour+ durations correctly."""
+    # Exactly 1 hour
+    track_1h = TrackItem(
+        id="t1", uri="spotify:track:t1", title="Long Mix",
+        artist="DJ", album="Set", release_year="2024", duration_ms=3_600_000,
+    )
+    assert track_1h.duration_formatted == "1:00:00"
+
+    # 1 hour, 2 minutes, 3 seconds
+    track_long = TrackItem(
+        id="t2", uri="spotify:track:t2", title="Podcast Episode",
+        artist="Host", album="Show", release_year="2024", duration_ms=3_723_000,
+    )
+    assert track_long.duration_formatted == "1:02:03"
+
+    # Under 1 hour stays as MM:SS
+    track_short = TrackItem(
+        id="t3", uri="spotify:track:t3", title="Short Song",
+        artist="Band", album="LP", release_year="2024", duration_ms=195_000,
+    )
+    assert track_short.duration_formatted == "03:15"
+
+
+class EmptyFakeSpotifyClient(SpotifyClient):
+    """Mock SpotifyClient that returns empty collections for edge-case testing."""
+
+    def __init__(self) -> None:
+        super().__init__(sp_client=None)
+        self.state = PlaybackState()
+
+    def get_devices(self) -> list[dict[str, Any]]:
+        return []
+
+    def get_playback_state(self) -> PlaybackState:
+        return self.state
+
+    def get_library_items(self) -> list[LibraryItem]:
+        return []
+
+    def iter_library_track_batches(self, item: LibraryItem, batch_size: int = 50):
+        return iter([])
+
+    def search_tracks(self, query: str, limit: int = 30) -> list[TrackItem]:
+        return []
+
+
+@pytest.mark.asyncio
+async def test_empty_library_displays_gracefully() -> None:
+    """App launches and renders without crash when the library is empty."""
+    fake_client = EmptyFakeSpotifyClient()
+    app = VibeTuneApp(spotify_client=fake_client, enable_polling=True)
+
+    async with app.run_test(size=(100, 28)) as pilot:
+        await pilot.pause()
+
+        # App should mount and render without errors
+        outer = app.query_one("#outer-frame")
+        assert outer.border_title == "VibeTune"
+
+        # Library pane should be empty but focused
+        assert app.library_pane.has_focus
+        assert len(app.library_pane.items) == 0
+
+        # Tracklist should be empty
+        assert len(app.tracklist_pane.displayed_tracks) == 0
+
+
+@pytest.mark.asyncio
+async def test_device_modal_with_no_devices() -> None:
+    """Device selector modal handles empty device list gracefully."""
+    fake_client = EmptyFakeSpotifyClient()
+    app = VibeTuneApp(spotify_client=fake_client, enable_polling=True)
+
+    async with app.run_test(size=(100, 28)) as pilot:
+        await pilot.pause()
+
+        # Open device modal
+        await pilot.press("d")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        assert isinstance(app.screen, DeviceSelectorModal)
+
+        # Dismiss it with Escape — should not crash
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, DeviceSelectorModal)
+
+
+@pytest.mark.asyncio
+async def test_search_mode_with_empty_tracklist() -> None:
+    """Search mode works even when tracklist is empty (catalog search still available)."""
+    fake_client = FakeSpotifyClient()
+    # Override library to return an empty item
+    original_get_library = fake_client.get_library_items
+    fake_client.get_library_items = lambda: [
+        LibraryItem("empty_pl", "Empty Playlist", "playlist", 0, "spotify:playlist:empty"),
+    ]
+    fake_client.iter_library_track_batches = lambda item, batch_size=50: iter([])
+
+    app = VibeTuneApp(spotify_client=fake_client, enable_polling=True)
+
+    async with app.run_test(size=(100, 28)) as pilot:
+        await pilot.pause()
+
+        # Select the empty playlist
+        await pilot.press("enter")
+        await pilot.pause()
+        assert len(app.tracklist_pane.displayed_tracks) == 0
+
+        # Enter search mode — should not crash on empty list
+        await pilot.press("/")
+        assert app.search_mode is True
+
+        # Escape back out
+        await pilot.press("escape")
+        assert app.search_mode is False
+
+
+@pytest.mark.asyncio
+async def test_terminal_resize_preserves_state() -> None:
+    """Resizing the terminal preserves playback state and cursor position."""
+    fake_client = FakeSpotifyClient()
+    app = VibeTuneApp(spotify_client=fake_client, enable_polling=True)
+
+    async with app.run_test(size=(100, 28)) as pilot:
+        await pilot.pause()
+
+        # Navigate down in tracklist
+        await pilot.press("tab")
+        await pilot.press("down")
+
+        # Record state before resize
+        playing_before = app.playback_state.is_playing
+        track_before = app.playback_state.track
+
+        # Resize to a much smaller terminal
+        await pilot.resize_terminal(40, 20)
+        await pilot.pause()
+
+        # State should be preserved
+        assert app.playback_state.is_playing == playing_before
+        assert app.playback_state.track == track_before
+
+        # Resize back to large
+        await pilot.resize_terminal(120, 36)
+        await pilot.pause()
+
+        # Still intact
+        assert app.playback_state.is_playing == playing_before
+        assert app.playback_state.track == track_before

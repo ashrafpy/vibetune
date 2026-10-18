@@ -7,29 +7,47 @@ credentials, sets up the connection, and opens the retro player screen.
 
 from __future__ import annotations
 
+import argparse
+import sys
 from pathlib import Path
+
+from vibetune import __version__
 from vibetune.app import VibeTuneApp
 from vibetune.spotify_client import SpotifyClient
 
 
 def run() -> None:
     """Launch the VibeTune retro terminal Spotify remote.
-    
-    Step 1: Read your Spotify secret keys from the `.env.local` file.
-    Step 2: Start up the graphical terminal interface (the 'App').
-    Step 3: Keep the player running until you press 'q' or close the terminal.
+
+    Parses CLI arguments, initializes the Spotify client, and starts
+    the Textual TUI application.
     """
-    # Look for your Spotify password/keys in .env.local in the current folder
-    client = SpotifyClient(env_path=Path.cwd() / ".env.local")
-    
-    # Create the terminal window with our Spotify connection
+    parser = argparse.ArgumentParser(
+        prog="vibetune",
+        description="VibeTune — Retro Terminal Spotify Connect Remote",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"VibeTune {__version__}",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path.cwd() / ".env.local",
+        help="Path to .env.local credentials file (default: ./.env.local)",
+    )
+    args = parser.parse_args()
+
+    client = SpotifyClient(env_path=args.config)
     app = VibeTuneApp(spotify_client=client)
-    
-    # Hand over control to Textual to draw the UI and listen for keypresses
-    app.run()
+
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        pass
+    except Exception as exc:
+        print(f"VibeTune error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    # If this file is run directly by Python, start the app!
     run()
-
