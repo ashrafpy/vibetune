@@ -11,6 +11,7 @@ This file builds the top-right corner of VibeTune:
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from io import BytesIO
 import httpx
 from PIL import Image, ImageEnhance
@@ -33,6 +34,10 @@ COMPACT_ART_ROWS = 4
 # Default exported constants for unit tests
 ART_CELL_WIDTH = WIDE_ART_WIDTH
 ART_CELL_ROWS = WIDE_ART_ROWS
+
+# LRU cache limits to prevent unbounded memory growth during long sessions
+_MAX_RAW_CACHE = 32
+_MAX_RENDERED_CACHE = 64
 
 
 def _build_sextant_table() -> tuple[str, ...]:
@@ -82,7 +87,7 @@ def _crop_text_line(line: Text, max_cells: int) -> Text:
     return cropped
 
 
-def render_halfblock_art(
+def render_sextant_art(
     image_bytes: bytes,
     width: int = WIDE_ART_WIDTH,
     height_rows: int = WIDE_ART_ROWS,
@@ -196,7 +201,7 @@ def default_retro_art(
                 px[x, y] = (18, 18, 18)
     buf = BytesIO()
     img.save(buf, format="PNG")
-    return render_halfblock_art(buf.getvalue(), width=width, height_rows=height_rows)
+    return render_sextant_art(buf.getvalue(), width=width, height_rows=height_rows)
 
 
 def _format_ms(ms: int) -> str:
@@ -214,8 +219,8 @@ class NowPlayingDeck(Widget):
         super().__init__(**kwargs)
         self._state: PlaybackState = PlaybackState()
         self._loaded_art_url: str | None = None
-        self._raw_art_cache: dict[str, bytes] = {}
-        self._rendered_cache: dict[tuple[str, int, int], list[Text]] = {}
+        self._raw_art_cache: OrderedDict[str, bytes] = OrderedDict()
+        self._rendered_cache: OrderedDict[tuple[str, int, int], list[Text]] = OrderedDict()
 
     def on_resize(self, event: events.Resize) -> None:
         self.refresh()
@@ -246,9 +251,11 @@ class NowPlayingDeck(Widget):
                 resp = await client.get(url)
                 resp.raise_for_status()
                 self._raw_art_cache[url] = resp.content
+                while len(self._raw_art_cache) > _MAX_RAW_CACHE:
+                    self._raw_art_cache.popitem(last=False)
                 if self._loaded_art_url == url:
                     self.refresh()
-        except Exception:
+        except httpx.HTTPError:
             if self._loaded_art_url == url:
                 self.refresh()
 
@@ -258,13 +265,17 @@ class NowPlayingDeck(Widget):
             key = (url, width, height_rows)
             if key not in self._rendered_cache:
                 try:
-                    self._rendered_cache[key] = render_halfblock_art(
+                    self._rendered_cache[key] = render_sextant_art(
                         self._raw_art_cache[url],
                         width=width,
                         height_rows=height_rows,
                     )
-                except Exception:
+                    while len(self._rendered_cache) > _MAX_RENDERED_CACHE:
+                        self._rendered_cache.popitem(last=False)
+                except (OSError, ValueError):
                     self._rendered_cache[key] = default_retro_art(width, height_rows)
+                    while len(self._rendered_cache) > _MAX_RENDERED_CACHE:
+                        self._rendered_cache.popitem(last=False)
             return self._rendered_cache[key]
         return default_retro_art(width, height_rows)
 

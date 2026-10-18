@@ -35,6 +35,7 @@ from vibetune.models import AudioSegment, LibraryItem, PlaybackState, TrackItem
 # Silence chatty network logging so terminal output stays clean and readable
 logging.getLogger("spotipy").setLevel(logging.CRITICAL)
 logging.getLogger("urllib3").setLevel(logging.CRITICAL)
+log = logging.getLogger(__name__)
 
 # Permissions VibeTune asks from Spotify (reading your library and controlling playback)
 SCOPES = " ".join(
@@ -158,6 +159,7 @@ class SpotifyClient:
         self._sp: spotipy.Spotify | None = sp_client
         self._sp_lock = threading.Lock()
         self._analysis_cache: dict[str, tuple[float, list[AudioSegment]]] = {}
+        self._analysis_lock = threading.Lock()
         self._last_device_id: str | None = None
         self._last_device_name: str = "No Active Device"
         self.auth_error: str | None = None
@@ -216,7 +218,8 @@ class SpotifyClient:
                 self._sp = spotipy.Spotify(auth_manager=auth_manager, requests_timeout=8, retries=1)
                 self.auth_error = None
                 return self._sp
-            except Exception as exc:
+            except (SpotifyException, OSError) as exc:
+                log.error("Spotify auth failed: %s", exc)
                 self.auth_error = str(exc)
                 return None
 
@@ -250,7 +253,8 @@ class SpotifyClient:
             self._last_device_id = first.get("id")
             self._last_device_name = first.get("name", "Spotify Device")
             return self._last_device_id
-        except Exception:
+        except (SpotifyException, KeyError, TypeError) as exc:
+            log.debug("Device lookup failed: %s", exc)
             return self._last_device_id
 
     def get_devices(self) -> list[dict[str, Any]]:
@@ -261,7 +265,8 @@ class SpotifyClient:
             resp = self.sp.devices()
             devices = (resp or {}).get("devices") or []
             return [d for d in devices if isinstance(d, dict) and d.get("id")]
-        except Exception:
+        except SpotifyException as exc:
+            log.warning("Failed to fetch devices: %s", exc)
             return []
 
     def transfer_to_device(self, device_id: str, device_name: str = "Spotify Device") -> bool:
@@ -273,7 +278,8 @@ class SpotifyClient:
         try:
             self.sp.transfer_playback(device_id=device_id, force_play=False)
             return True
-        except Exception:
+        except SpotifyException as exc:
+            log.warning("Device transfer failed: %s", exc)
             return False
 
     def cycle_device(self) -> str:
@@ -343,7 +349,8 @@ class SpotifyClient:
                 device_name=dev_name,
                 tempo_bpm=tempo_bpm,
             )
-        except Exception:
+        except (SpotifyException, KeyError, TypeError, ValueError) as exc:
+            log.debug("Playback state fetch failed: %s", exc)
             return PlaybackState(
                 is_playing=False,
                 device_id=self._last_device_id,
@@ -362,7 +369,8 @@ class SpotifyClient:
             else:
                 self.sp.start_playback(device_id=dev_id)
                 return True
-        except Exception:
+        except SpotifyException as exc:
+            log.warning("Play/pause toggle failed: %s", exc)
             return state.is_playing
 
     def next_track(self, device_id: str | None = None) -> None:
@@ -371,8 +379,8 @@ class SpotifyClient:
             return
         try:
             self.sp.next_track(device_id=device_id or self.ensure_device_id())
-        except Exception:
-            pass
+        except SpotifyException as exc:
+            log.warning("Skip next failed: %s", exc)
 
     def previous_track(self, device_id: str | None = None) -> None:
         """Skip backward to the previous song or beginning of current song ('p' key)."""
@@ -380,8 +388,8 @@ class SpotifyClient:
             return
         try:
             self.sp.previous_track(device_id=device_id or self.ensure_device_id())
-        except Exception:
-            pass
+        except SpotifyException as exc:
+            log.warning("Skip previous failed: %s", exc)
 
     def seek_relative(self, current_ms: int, delta_ms: int, duration_ms: int, device_id: str | None = None) -> int:
         """Jump 5 seconds forward or backward in the current song (Left/Right arrow keys)."""
@@ -390,8 +398,8 @@ class SpotifyClient:
             return target_ms
         try:
             self.sp.seek_track(target_ms, device_id=device_id or self.ensure_device_id())
-        except Exception:
-            pass
+        except SpotifyException as exc:
+            log.warning("Seek failed: %s", exc)
         return target_ms
 
     def adjust_volume(self, current_vol: int, delta: int, device_id: str | None = None) -> int:
@@ -401,8 +409,8 @@ class SpotifyClient:
             return target_vol
         try:
             self.sp.volume(target_vol, device_id=device_id or self.ensure_device_id())
-        except Exception:
-            pass
+        except SpotifyException as exc:
+            log.warning("Volume adjust failed: %s", exc)
         return target_vol
 
     def toggle_shuffle(self, current_shuffle: bool, device_id: str | None = None) -> bool:
@@ -412,8 +420,8 @@ class SpotifyClient:
             return new_shuffle
         try:
             self.sp.shuffle(new_shuffle, device_id=device_id or self.ensure_device_id())
-        except Exception:
-            pass
+        except SpotifyException as exc:
+            log.warning("Shuffle toggle failed: %s", exc)
         return new_shuffle
 
     def cycle_repeat(self, current_repeat: str, device_id: str | None = None) -> str:
@@ -428,8 +436,8 @@ class SpotifyClient:
             return new_repeat
         try:
             self.sp.repeat(new_repeat, device_id=device_id or self.ensure_device_id())
-        except Exception:
-            pass
+        except SpotifyException as exc:
+            log.warning("Repeat cycle failed: %s", exc)
         return new_repeat
 
     def play_track(
@@ -458,8 +466,8 @@ class SpotifyClient:
                         offset={"uri": track.uri},
                     )
                     return
-                except Exception:
-                    pass
+                except SpotifyException as exc:
+                    log.debug("Context playback failed, trying fallback: %s", exc)
 
             if fallback_uris:
                 try:
@@ -470,8 +478,8 @@ class SpotifyClient:
                 self.sp.start_playback(device_id=dev_id, uris=uris_slice)
             else:
                 self.sp.start_playback(device_id=dev_id, uris=[track.uri])
-        except Exception:
-            pass
+        except SpotifyException as exc:
+            log.warning("Track playback failed: %s", exc)
 
     def get_library_items(self) -> list[LibraryItem]:
         """Fetch Liked Songs, saved Playlists, favorite Artists, and saved Albums for Pane 1.
@@ -510,7 +518,8 @@ class SpotifyClient:
                     if aid and aname:
                         artist_counts[aid] += 1
                         artist_meta[aid] = (aname, artist.get("uri") or f"spotify:artist:{aid}")
-        except Exception:
+        except SpotifyException as exc:
+            log.warning("Failed to fetch liked songs: %s", exc)
             items.append(
                 LibraryItem(
                     id="liked_songs",
@@ -537,8 +546,8 @@ class SpotifyClient:
                         uri=pl.get("uri"),
                     )
                 )
-        except Exception:
-            pass
+        except SpotifyException as exc:
+            log.warning("Failed to fetch playlists: %s", exc)
 
         # 3. Saved Albums (use single-cell glyph '◉' so cell alignment stays exact)
         try:
@@ -562,8 +571,8 @@ class SpotifyClient:
                     if aid and aname:
                         artist_counts[aid] += 2
                         artist_meta[aid] = (aname, artist.get("uri") or f"spotify:artist:{aid}")
-        except Exception:
-            pass
+        except SpotifyException as exc:
+            log.warning("Failed to fetch saved albums: %s", exc)
 
         # 4. Artists
         added_artist_ids: set[str] = set()
@@ -583,8 +592,8 @@ class SpotifyClient:
                             uri=artist.get("uri") or f"spotify:artist:{aid}",
                         )
                     )
-        except Exception:
-            pass
+        except SpotifyException as exc:
+            log.warning("Failed to fetch followed artists: %s", exc)
 
         for aid, count in artist_counts.most_common(15):
             if aid in added_artist_ids:
@@ -706,7 +715,8 @@ class SpotifyClient:
                     )
                 if batch:
                     yield batch
-        except Exception:
+        except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError) as exc:
+            log.warning("Public playlist fetch failed for %s: %s", playlist_id, exc)
             return
 
     def iter_library_track_batches(
@@ -747,7 +757,8 @@ class SpotifyClient:
                     offset += len(rows)
                     if len(rows) < 50:
                         break
-                except Exception:
+                except SpotifyException as exc:
+                    log.warning("Liked track batch fetch failed: %s", exc)
                     break
 
         elif item.item_type == "playlist":
@@ -783,8 +794,8 @@ class SpotifyClient:
                         t.context_uri = item.uri
                     if fallback:
                         yield fallback
-            except Exception:
-                pass
+            except (httpx.HTTPError, KeyError, ValueError) as exc:
+                log.warning("Playlist fallback fetch failed: %s", exc)
 
         elif item.item_type == "artist":
             clean_artist = item.name.lstrip("♪ ").strip()
@@ -829,8 +840,8 @@ class SpotifyClient:
                     )
                 if batch:
                     yield batch
-            except Exception:
-                pass
+            except SpotifyException as exc:
+                log.warning("Album track fetch failed: %s", exc)
 
     def get_library_tracks(self, item: LibraryItem, limit: int = 50) -> list[TrackItem]:
         """Fetch tracklist for a library item (convenience wrapper over iter_library_track_batches)."""
@@ -873,7 +884,8 @@ class SpotifyClient:
                         tracks.append(parsed)
                 if len(raw_items) < page_size:
                     break
-            except Exception:
+            except SpotifyException as exc:
+                log.warning("Search page %d failed: %s", page, exc)
                 break
         return tracks
 
@@ -884,8 +896,9 @@ class SpotifyClient:
         This provides the musical 'pulse' that makes the frequency bars in the visualizer
         bounce in rhythm with the music.
         """
-        if track_id in self._analysis_cache:
-            return self._analysis_cache[track_id]
+        with self._analysis_lock:
+            if track_id in self._analysis_cache:
+                return self._analysis_cache[track_id]
 
         digest = hashlib.sha256(track_id.encode("utf-8")).digest()
         tempo = 92.0 + (digest[0] % 56)  # 92 - 147 BPM
@@ -924,5 +937,6 @@ class SpotifyClient:
             t += step_sec
             idx += 1
 
-        self._analysis_cache[track_id] = (tempo, segments)
+        with self._analysis_lock:
+            self._analysis_cache[track_id] = (tempo, segments)
         return tempo, segments
