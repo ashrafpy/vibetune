@@ -16,7 +16,7 @@ from textual import events
 from textual.message import Message
 from textual.widget import Widget
 
-from vibetune.models import LibraryItem
+from vibetune.models import LibraryItem, NOW_PLAYING_QUEUE_ID
 
 
 def _fit_cell(text: str, width: int) -> str:
@@ -51,7 +51,7 @@ class LibraryPane(Widget):
         super().__init__(**kwargs)
         self._items: list[LibraryItem] = []
         self._selected_idx: int = 0
-        self._active_item_id: str = "liked_songs"
+        self._active_item_id: str = NOW_PLAYING_QUEUE_ID
         self._scroll_offset: int = 0
 
     def on_resize(self, event: events.Resize) -> None:
@@ -73,6 +73,33 @@ class LibraryPane(Widget):
 
     def set_active_item(self, item_id: str) -> None:
         self._active_item_id = item_id
+        self.refresh()
+
+    def upsert_queue_item(
+        self,
+        track_count: int,
+        set_active: bool = False,
+        select: bool = False,
+    ) -> None:
+        for item in self._items:
+            if item.id == NOW_PLAYING_QUEUE_ID:
+                item.track_count = track_count
+                break
+        else:
+            self._items.insert(
+                0,
+                LibraryItem(
+                    id=NOW_PLAYING_QUEUE_ID,
+                    name="▶ Now Playing",
+                    item_type="queue",
+                    track_count=track_count,
+                    uri="",
+                ),
+            )
+        if set_active:
+            self._active_item_id = NOW_PLAYING_QUEUE_ID
+        if select:
+            self._selected_idx = 0
         self.refresh()
 
     def move_cursor(self, delta: int) -> None:

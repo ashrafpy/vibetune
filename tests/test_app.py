@@ -8,7 +8,7 @@ from PIL import Image
 import pytest
 
 from vibetune.app import DeviceSelectorModal, VibeTuneApp
-from vibetune.models import LibraryItem, PlaybackState, TrackItem
+from vibetune.models import LibraryItem, NOW_PLAYING_QUEUE_ID, PlaybackState, TrackItem
 from vibetune.spotify_client import SpotifyClient
 from vibetune.widgets.now_playing import render_sextant_art
 
@@ -98,6 +98,7 @@ class FakeSpotifyClient(SpotifyClient):
             tempo_bpm=110.0,
         )
         self.played_tracks: list[TrackItem] = []
+        self.queue_tracks: list[TrackItem] = []
         self.next_calls = 0
         self.prev_calls = 0
         self.search_queries: list[str] = []
@@ -113,7 +114,8 @@ class FakeSpotifyClient(SpotifyClient):
         return True
 
     def get_playback_state(self) -> PlaybackState:
-        return self.state
+        from dataclasses import replace
+        return replace(self.state)
 
     def get_library_items(self) -> list[LibraryItem]:
         return [
@@ -121,7 +123,46 @@ class FakeSpotifyClient(SpotifyClient):
             LibraryItem("pl_synth", "Synthwave Radio", "playlist", 80, "spotify:playlist:pl_synth"),
         ]
 
+    def get_playback_queue(
+        self,
+        current_track: TrackItem | None = None,
+        fallback_tracks: list[TrackItem] | None = None,
+    ) -> list[TrackItem]:
+        curr = current_track or self.state.track
+        if not self.queue_tracks and fallback_tracks == self.tracks_liked:
+            return list(self.tracks_liked)
+        res: list[TrackItem] = []
+        seen: set[str] = set()
+        if curr:
+            res.append(curr)
+            seen.add(curr.id)
+        for t in self.queue_tracks:
+            if t.id not in seen:
+                res.append(t)
+                seen.add(t.id)
+        if fallback_tracks:
+            start_idx = 0
+            if curr:
+                for idx, t in enumerate(fallback_tracks):
+                    if t.id == curr.id:
+                        start_idx = idx
+                        break
+            slice_tracks = (
+                fallback_tracks[start_idx:]
+                if (curr and any(t.id == curr.id for t in fallback_tracks))
+                else fallback_tracks
+            )
+            for t in slice_tracks:
+                if t.id not in seen:
+                    res.append(t)
+                    seen.add(t.id)
+        return res
+
     def get_library_tracks(self, item: LibraryItem, limit: int = 50) -> list[TrackItem]:
+        if item.id == NOW_PLAYING_QUEUE_ID or item.item_type == "queue":
+            return self.get_playback_queue(self.state.track)
+        if item.track_count == 0 or item.id == "empty_pl":
+            return []
         if item.id == "pl_synth":
             return list(self.tracks_synth)
         return list(self.tracks_liked)
@@ -200,7 +241,7 @@ async def test_navigation_controls_device_modal_and_fullscreen() -> None:
 
         # Verify initial mount & focus on LibraryPane
         assert app.library_pane.has_focus
-        assert len(app.library_pane.items) == 2
+        assert len(app.library_pane.items) == 3
         assert len(app.tracklist_pane.displayed_tracks) == 3
 
         # Press Tab to move focus to TracklistPane, F1 back to LibraryPane
@@ -210,6 +251,7 @@ async def test_navigation_controls_device_modal_and_fullscreen() -> None:
         assert app.library_pane.has_focus
 
         # Navigate down in LibraryPane to "Synthwave Radio" and press Enter
+        await pilot.press("down")
         await pilot.press("down")
         await pilot.press("enter")
         await pilot.pause()
@@ -324,7 +366,8 @@ class EmptyFakeSpotifyClient(SpotifyClient):
         return []
 
     def get_playback_state(self) -> PlaybackState:
-        return self.state
+        from dataclasses import replace
+        return replace(self.state)
 
     def get_library_items(self) -> list[LibraryItem]:
         return []
@@ -395,6 +438,7 @@ async def test_search_mode_with_empty_tracklist() -> None:
         await pilot.pause()
 
         # Select the empty playlist
+        await pilot.press("down")
         await pilot.press("enter")
         await pilot.pause()
         assert len(app.tracklist_pane.displayed_tracks) == 0
@@ -440,3 +484,168 @@ async def test_terminal_resize_preserves_state() -> None:
         # Still intact
         assert app.playback_state.is_playing == playing_before
         assert app.playback_state.track == track_before
+
+
+@pytest.mark.asyncio
+async def test_search_and_play_track_dynamic_queue() -> None:
+    """1. Searching and playing a track dynamically switches LibraryPane active item to
+    '▶ Now Playing' (now_playing_queue), populates TracklistPane with live queue + search context tracks,
+    does NOT pass old playlist context_uri to play_track, and pressing '/' then Escape preserves dynamic queue.
+    """
+    fake_client = FakeSpotifyClient()
+    queue_extra = TrackItem(
+        id="queue_trk_1",
+        uri="spotify:track:queue_trk_1",
+        title="Queue Song 1",
+        artist="Queue Artist",
+        album="Queue Album",
+        release_year="2024",
+        duration_ms=180_000,
+    )
+    fake_client.queue_tracks = [queue_extra]
+    app = VibeTuneApp(spotify_client=fake_client, enable_polling=True)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+
+        # Navigate down in LibraryPane to Synthwave Radio (index 2) and press Enter
+        await pilot.press("down", "down")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app._active_context_uri == "spotify:playlist:pl_synth"
+        assert app.library_pane._active_item_id == "pl_synth"
+        assert not app._viewing_queue
+        assert app.tracklist_pane.displayed_tracks[0].title == "Tech Noir"
+
+        # Intercept play_track calls to inspect context_uri argument
+        played_args: dict[str, Any] = {}
+        orig_play_track = fake_client.play_track
+
+        def tracking_play_track(
+            track: TrackItem,
+            context_uri: str | None = None,
+            fallback_uris: list[str] | None = None,
+            device_id: str | None = None,
+        ) -> None:
+            played_args["track"] = track
+            played_args["context_uri"] = context_uri
+            played_args["fallback_uris"] = fallback_uris
+            orig_play_track(track, context_uri, fallback_uris, device_id)
+
+        fake_client.play_track = tracking_play_track
+
+        # Press '/' to enter search mode, search for 'daft punk', press Enter for catalog search
+        await pilot.press("/")
+        for ch in "daft punk":
+            await pilot.press("space" if ch == " " else ch)
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # Press Enter again on the search result to activate playback
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # Verify old playlist context_uri was NOT leaked into play_track
+        assert played_args.get("track") is not None
+        assert played_args["track"].title == "Instant Crush"
+        assert played_args["context_uri"] is None
+
+        # Verify LibraryPane active item switched to NOW_PLAYING_QUEUE_ID
+        assert app.library_pane._active_item_id == NOW_PLAYING_QUEUE_ID
+        assert app._viewing_queue is True
+
+        # Verify TracklistPane is populated with the live queue + search context tracks
+        displayed_titles = [t.title for t in app.tracklist_pane.displayed_tracks]
+        assert "Instant Crush" in displayed_titles
+        assert "Queue Song 1" in displayed_titles
+
+        # Verify pressing '/' then Escape preserves dynamic queue rather than reverting
+        await pilot.press("/")
+        assert app.search_mode is True
+        await pilot.press("escape")
+        assert app.search_mode is False
+        assert [t.title for t in app.tracklist_pane.displayed_tracks] == displayed_titles
+
+
+@pytest.mark.asyncio
+async def test_switch_between_library_playlist_and_now_playing_queue() -> None:
+    """2. Selecting a library playlist (e.g. Synthwave Radio) and then selecting
+    '▶ Now Playing' in LibraryPane switches TracklistPane back to the dynamic queue.
+    """
+    fake_client = FakeSpotifyClient()
+    app = VibeTuneApp(spotify_client=fake_client, enable_polling=True)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+
+        # Initially viewing queue
+        assert app._viewing_queue is True
+        assert app.library_pane._active_item_id == NOW_PLAYING_QUEUE_ID
+        initial_queue_titles = [t.title for t in app.tracklist_pane.displayed_tracks]
+
+        # Select Synthwave Radio (down twice, then enter)
+        await pilot.press("f1")
+        await pilot.press("down", "down")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app._viewing_queue is False
+        assert app.library_pane._active_item_id == "pl_synth"
+        assert len(app.tracklist_pane.displayed_tracks) == 1
+        assert app.tracklist_pane.displayed_tracks[0].title == "Tech Noir"
+
+        # Select "▶ Now Playing" (up twice, then enter)
+        await pilot.press("f1")
+        await pilot.press("up", "up")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # Verify switched back to dynamic queue
+        assert app._viewing_queue is True
+        assert app.library_pane._active_item_id == NOW_PLAYING_QUEUE_ID
+        assert [t.title for t in app.tracklist_pane.displayed_tracks] == initial_queue_titles
+
+
+@pytest.mark.asyncio
+async def test_external_playback_switch_to_out_of_context_track() -> None:
+    """3. When external Spotify playback switches to a track outside the currently
+    browsed playlist, VibeTuneApp dynamically switches to '▶ Now Playing Queue'.
+    """
+    fake_client = FakeSpotifyClient()
+    app = VibeTuneApp(spotify_client=fake_client, enable_polling=True)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+
+        # Browse Synthwave Radio
+        await pilot.press("down", "down")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app._viewing_queue is False
+        assert app.library_pane._active_item_id == "pl_synth"
+        assert len(app.tracklist_pane.displayed_tracks) == 1
+        assert app.tracklist_pane.displayed_tracks[0].title == "Tech Noir"
+
+        # Simulate external playback change to a track not in Synthwave Radio
+        external_track = TrackItem(
+            id="ext_trk_99",
+            uri="spotify:track:ext_trk_99",
+            title="External Radio Hit",
+            artist="External Artist",
+            album="External Album",
+            release_year="2025",
+            duration_ms=210_000,
+        )
+        fake_client.state.track = external_track
+
+        # Trigger playback refresh
+        await app._refresh_playback_state(force=True)
+        await pilot.pause()
+
+        # Verify dynamic switch to Now Playing Queue
+        assert app._viewing_queue is True
+        assert app.library_pane._active_item_id == NOW_PLAYING_QUEUE_ID
+        assert app.tracklist_pane.title == "▶ Now Playing Queue"
+        assert app.tracklist_pane.displayed_tracks[0].id == "ext_trk_99"

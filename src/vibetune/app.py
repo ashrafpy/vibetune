@@ -23,7 +23,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widget import Widget
 
-from vibetune.models import LibraryItem, PlaybackState, TrackItem
+from vibetune.models import LibraryItem, NOW_PLAYING_QUEUE_ID, PlaybackState, TrackItem
 from vibetune.spotify_client import SpotifyClient
 from vibetune.widgets.library_pane import LibraryPane
 from vibetune.widgets.now_playing import NowPlayingDeck
@@ -275,6 +275,10 @@ class VibeTuneApp(App[None]):
         self.playback_state = PlaybackState()
         self.search_mode = False
         self._active_context_uri: str | None = None
+        self._queue_tracks: list[TrackItem] = []
+        self._queue_title: str = "▶ Now Playing Queue"
+        self._viewing_queue: bool = True
+        self._initial_load_complete: bool = False
         # Cooldown timestamp so background polls never revert optimistic user toggles
         self._suppress_poll_until: float = 0.0
         # Target volume set by user so hardware speakers (e.g. Echo Dot) that round 50% -> 49% don't drift
@@ -351,9 +355,17 @@ class VibeTuneApp(App[None]):
     async def _initial_load(self) -> None:
         """Fetch playlists and current song concurrently on startup."""
         await asyncio.gather(
-            self._load_library(),
             self._refresh_playback_state(force=True),
+            self._load_library(),
         )
+        self._initial_load_complete = True
+        if (
+            self.is_mounted
+            and self.playback_state.track
+            and self._viewing_queue
+            and self.playback_state.track.id not in {t.id for t in self._queue_tracks}
+        ):
+            await self._load_queue_view()
 
     def _poll_playback_worker(self) -> None:
         if time.monotonic() < self._suppress_poll_until:
@@ -373,12 +385,43 @@ class VibeTuneApp(App[None]):
                 state.volume_percent = self._user_target_volume
             else:
                 self._user_target_volume = None
+
+        prev_track = self.playback_state.track
+        prev_id = prev_track.id if prev_track else None
+        new_id = state.track.id if state.track else None
+        track_changed = prev_id != new_id and state.track is not None
+
         self.apply_playback_state(state)
-        if self.is_mounted and len(self.library_pane.items) <= 1:
+
+        if (
+            self._initial_load_complete
+            and track_changed
+            and (
+                self._viewing_queue
+                or state.track.id not in {t.id for t in self.tracklist_pane.base_tracks}
+            )
+        ):
+            live_queue = await asyncio.to_thread(
+                self.spotify.get_playback_queue,
+                state.track,
+                self._queue_tracks if self._viewing_queue else None,
+            )
+            if live_queue and self.is_mounted:
+                self._queue_tracks = live_queue
+                self._viewing_queue = True
+                self._queue_title = "▶ Now Playing Queue"
+                self.library_pane.upsert_queue_item(len(self._queue_tracks), set_active=True)
+                if not self.search_mode:
+                    self.tracklist_pane.set_tracklist(self._queue_title, self._queue_tracks)
+                    self.tracklist_pane.set_playing_track(state.track.id)
+
+        if self.is_mounted and len(self.library_pane.items) <= 1 and not self._viewing_queue:
             await self._load_library()
 
     def apply_playback_state(self, state: PlaybackState) -> None:
-        self.playback_state = state
+        from dataclasses import replace
+
+        self.playback_state = replace(state)
         if not self.is_mounted:
             return
         try:
@@ -402,24 +445,60 @@ class VibeTuneApp(App[None]):
 
     async def _load_library(self) -> None:
         items = await asyncio.to_thread(self.spotify.get_library_items)
-        if not self.is_mounted or not items:
+        if not self.is_mounted or (not items and not self.playback_state.track):
             return
         self.library_pane.set_items(items)
+        initial_tracks: list[TrackItem] = []
+        if items:
+            initial_tracks = await asyncio.to_thread(self.spotify.get_library_tracks, items[0])
+        queue_tracks = await asyncio.to_thread(
+            self.spotify.get_playback_queue, self.playback_state.track, initial_tracks
+        )
+        self._queue_tracks = list(queue_tracks)
+        self.library_pane.upsert_queue_item(len(self._queue_tracks), set_active=True, select=True)
         if not self.tracklist_pane.displayed_tracks:
-            first = items[0]
-            self.library_pane.set_active_item(first.id)
-            self._active_context_uri = first.uri
-            await self._stream_library_item_tracks(first)
+            self._viewing_queue = True
+            self.tracklist_pane.set_tracklist(self._queue_title, self._queue_tracks)
+            self.tracklist_pane.set_playing_track(
+                self.playback_state.track.id if self.playback_state.track else None
+            )
 
     @on(LibraryPane.ItemSelected)
     async def _on_library_item_selected(self, event: LibraryPane.ItemSelected) -> None:
-        self._active_context_uri = event.item.uri
-        self.tracklist_pane.focus()
-        self.run_worker(
-            self._stream_library_item_tracks(event.item),
-            group="track_loader",
-            exclusive=True,
+        if event.item.id == NOW_PLAYING_QUEUE_ID or event.item.item_type == "queue":
+            self._viewing_queue = True
+            self._active_context_uri = None
+            self.tracklist_pane.focus()
+            self.run_worker(
+                self._load_queue_view(),
+                group="track_loader",
+                exclusive=True,
+            )
+        else:
+            self._viewing_queue = False
+            self._active_context_uri = event.item.uri
+            self.tracklist_pane.focus()
+            self.run_worker(
+                self._stream_library_item_tracks(event.item),
+                group="track_loader",
+                exclusive=True,
+            )
+
+    async def _load_queue_view(self) -> None:
+        self.retro_footer.set_status_note("Loading queue…")
+        queue_tracks = await asyncio.to_thread(
+            self.spotify.get_playback_queue,
+            self.playback_state.track,
+            self._queue_tracks,
         )
+        if not self.is_mounted:
+            return
+        self._queue_tracks = list(queue_tracks)
+        self.library_pane.upsert_queue_item(len(self._queue_tracks), set_active=True)
+        self.tracklist_pane.set_tracklist(self._queue_title, self._queue_tracks)
+        playing_id = self.playback_state.track.id if self.playback_state.track else None
+        self.tracklist_pane.set_playing_track(playing_id)
+        self.retro_footer.set_status_note(f"Loaded {len(self._queue_tracks)} tracks in queue")
 
     async def _stream_library_item_tracks(self, item: LibraryItem) -> None:
         """Stream all tracks of `item` in batches so large playlists (e.g. 590 tracks) load completely."""
@@ -475,13 +554,51 @@ class VibeTuneApp(App[None]):
         self.apply_playback_state(self.playback_state)
         self.retro_footer.set_status_note(f"Playing: {track.title}")
 
+        if event.from_search:
+            self._active_context_uri = track.context_uri
+            self._viewing_queue = True
+            self._queue_title = (
+                f'▶ Now Playing: "{event.search_query}"'
+                if event.search_query
+                else "▶ Now Playing Queue"
+            )
+
+        effective_context_uri = (
+            track.context_uri
+            if event.from_search
+            else (track.context_uri or self._active_context_uri)
+        )
+
+        if event.from_search or self._viewing_queue:
+            start_idx = 0
+            for idx, t in enumerate(event.all_tracks):
+                if t.id == track.id:
+                    start_idx = idx
+                    break
+            self._queue_tracks = list(event.all_tracks[start_idx:])
+        else:
+            self._queue_tracks = list(event.all_tracks)
+
+        self.library_pane.upsert_queue_item(len(self._queue_tracks), set_active=self._viewing_queue)
+        if self._viewing_queue:
+            self.tracklist_pane.set_tracklist(self._queue_title, self._queue_tracks)
+            self.tracklist_pane.set_playing_track(track.id)
+
         await asyncio.to_thread(
             self.spotify.play_track,
             track,
-            track.context_uri or self._active_context_uri,
+            effective_context_uri,
             uris,
             self.playback_state.device_id,
         )
+
+        live_queue = await asyncio.to_thread(self.spotify.get_playback_queue, track, event.all_tracks)
+        if live_queue and self.is_mounted:
+            self._queue_tracks = live_queue
+            self.library_pane.upsert_queue_item(len(self._queue_tracks), set_active=self._viewing_queue)
+            if self._viewing_queue and not self.search_mode:
+                self.tracklist_pane.set_tracklist(self._queue_title, self._queue_tracks)
+                self.tracklist_pane.set_playing_track(track.id)
 
     def on_key(self, event: events.Key) -> None:
         """Centralized Two-Mode State Machine (Normal Mode vs Search Mode)."""

@@ -30,7 +30,13 @@ import spotipy
 from spotipy.exceptions import SpotifyException
 from spotipy.oauth2 import CacheFileHandler, SpotifyOAuth
 
-from vibetune.models import AudioSegment, LibraryItem, PlaybackState, TrackItem
+from vibetune.models import (
+    AudioSegment,
+    LibraryItem,
+    NOW_PLAYING_QUEUE_ID,
+    PlaybackState,
+    TrackItem,
+)
 
 # Silence chatty network logging so terminal output stays clean and readable
 logging.getLogger("spotipy").setLevel(logging.CRITICAL)
@@ -732,6 +738,12 @@ class SpotifyClient:
         songs right away so you can start browsing and playing, then quietly delivers
         the next 50 in the background.
         """
+        if item.item_type == "queue" or item.id == NOW_PLAYING_QUEUE_ID:
+            queue = self.get_playback_queue()
+            if queue:
+                yield queue
+            return
+
         if not self.sp:
             return
 
@@ -842,6 +854,85 @@ class SpotifyClient:
                     yield batch
             except SpotifyException as exc:
                 log.warning("Album track fetch failed: %s", exc)
+
+    def get_playback_queue(
+        self,
+        current_track: TrackItem | None = None,
+        fallback_tracks: list[TrackItem] | None = None,
+    ) -> list[TrackItem]:
+        """Fetch the dynamic Spotify playback queue, falling back to context/catalog tracks if needed."""
+        queue_tracks: list[TrackItem] = []
+        seen_ids: set[str] = set()
+
+        if current_track:
+            queue_tracks.append(current_track)
+            seen_ids.add(current_track.id)
+
+        if self.sp:
+            try:
+                raw_queue = self.sp.queue()
+                if isinstance(raw_queue, dict):
+                    raw_curr = raw_queue.get("currently_playing")
+                    if raw_curr:
+                        parsed_curr = _parse_track(raw_curr)
+                        if parsed_curr and parsed_curr.id not in seen_ids:
+                            queue_tracks.insert(0, parsed_curr)
+                            seen_ids.add(parsed_curr.id)
+                    for raw_t in raw_queue.get("queue") or []:
+                        parsed_t = _parse_track(raw_t)
+                        if parsed_t and parsed_t.id not in seen_ids:
+                            queue_tracks.append(parsed_t)
+                            seen_ids.add(parsed_t.id)
+            except (SpotifyException, KeyError, TypeError, ValueError) as exc:
+                log.warning("Playback queue fetch failed: %s", exc)
+
+        if fallback_tracks:
+            slice_tracks = fallback_tracks
+            if current_track:
+                for idx, t in enumerate(fallback_tracks):
+                    if t.id == current_track.id:
+                        slice_tracks = fallback_tracks[idx:]
+                        break
+            for t in slice_tracks:
+                if t.id not in seen_ids:
+                    queue_tracks.append(t)
+                    seen_ids.add(t.id)
+
+        if len(queue_tracks) <= 1 and self.sp and current_track:
+            if current_track.context_uri and current_track.context_uri.startswith("spotify:album:"):
+                album_id = current_track.context_uri.split(":")[-1]
+                album_item = LibraryItem(album_id, current_track.album, "album", 0, current_track.context_uri)
+                tracks = self.get_library_tracks(album_item)
+                start_idx = 0
+                for idx, t in enumerate(tracks):
+                    if t.id == current_track.id:
+                        start_idx = idx
+                        break
+                for t in tracks[start_idx:]:
+                    if t.id not in seen_ids:
+                        queue_tracks.append(t)
+                        seen_ids.add(t.id)
+            elif current_track.context_uri and current_track.context_uri.startswith("spotify:playlist:"):
+                pl_id = current_track.context_uri.split(":")[-1]
+                pl_item = LibraryItem(pl_id, "Playlist", "playlist", 0, current_track.context_uri)
+                tracks = self.get_library_tracks(pl_item, limit=50)
+                start_idx = 0
+                for idx, t in enumerate(tracks):
+                    if t.id == current_track.id:
+                        start_idx = idx
+                        break
+                for t in tracks[start_idx:]:
+                    if t.id not in seen_ids:
+                        queue_tracks.append(t)
+                        seen_ids.add(t.id)
+            elif current_track.artist and current_track.artist != "Unknown Artist":
+                tracks = self.search_tracks(current_track.artist, limit=20)
+                for t in tracks:
+                    if t.id not in seen_ids:
+                        queue_tracks.append(t)
+                        seen_ids.add(t.id)
+
+        return queue_tracks
 
     def get_library_tracks(self, item: LibraryItem, limit: int = 50) -> list[TrackItem]:
         """Fetch tracklist for a library item (convenience wrapper over iter_library_track_batches)."""

@@ -45,9 +45,12 @@ class TrackItem:
         return f"{minutes:02d}:{seconds:02d}"
 
 
+NOW_PLAYING_QUEUE_ID = "now_playing_queue"
+
+
 @dataclass
 class LibraryItem:
-    """Represents a library entry in Pane 1 (Liked Songs, Playlist, or Album).
+    """Represents a library entry in Pane 1 (Liked Songs, Playlist, Album, or Queue).
     
     This represents an item in your left-hand sidebar menu, such as a playlist
     or your saved albums collection.
@@ -55,7 +58,7 @@ class LibraryItem:
 
     id: str             # Unique ID for the playlist or album
     name: str           # Display name (e.g., 'Discover Weekly' or 'Daily Mix 1')
-    item_type: Literal["liked", "playlist", "album", "artist"]  # Category of library entry
+    item_type: Literal["liked", "playlist", "album", "artist", "queue"]  # Category of library entry ("liked", "playlist", "album", "artist", "queue")
     track_count: int    # Total number of songs inside this collection
     uri: str | None = None  # Spotify URI for loading the collection
 

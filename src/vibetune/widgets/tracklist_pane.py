@@ -52,10 +52,18 @@ class TracklistPane(Widget):
     class TrackActivated(Message):
         """Posted when a track is chosen for playback."""
 
-        def __init__(self, track: TrackItem, all_tracks: list[TrackItem]) -> None:
+        def __init__(
+            self,
+            track: TrackItem,
+            all_tracks: list[TrackItem],
+            from_search: bool = False,
+            search_query: str = "",
+        ) -> None:
             super().__init__()
             self.track = track
             self.all_tracks = all_tracks
+            self.from_search = from_search
+            self.search_query = search_query
 
     class CatalogSearchRequested(Message):
         """Posted when the user presses Enter on a search query to search Spotify's full catalog."""
@@ -82,6 +90,14 @@ class TracklistPane(Widget):
 
     def on_resize(self, event: events.Resize) -> None:
         self.refresh()
+
+    @property
+    def title(self) -> str:
+        return self._title
+
+    @property
+    def base_tracks(self) -> list[TrackItem]:
+        return self._base_tracks
 
     @property
     def search_mode(self) -> bool:
@@ -235,9 +251,17 @@ class TracklistPane(Widget):
 
             selected = self.get_selected_track()
             if selected:
-                self._title = f'Search: "{q}"' if q else self._title
+                self._base_tracks = list(self._displayed_tracks)
+                self._title = f'▶ Now Playing: "{q}"' if q else "▶ Now Playing Queue"
                 self.exit_search_mode(restore_base=False)
-                self.post_message(self.TrackActivated(selected, list(self._displayed_tracks)))
+                self.post_message(
+                    self.TrackActivated(
+                        selected,
+                        list(self._displayed_tracks),
+                        from_search=True,
+                        search_query=q,
+                    )
+                )
             elif q:
                 self.post_message(self.CatalogSearchRequested(q))
             return
