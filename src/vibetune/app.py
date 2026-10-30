@@ -104,7 +104,9 @@ class DeviceSelectorWidget(Widget):
                 name = str(dev.get("name") or "Spotify Device")
                 dtype = str(dev.get("type") or "Device")
                 vol = dev.get("volume_percent")
-                vol_str = f"{vol}%" if vol is not None else ""
+                supports_vol = dev.get("supports_volume") is not False and vol is not None and not dev.get("is_restricted")
+                vol_str = f"{vol}%" if supports_vol else "--%"
+                vol_fg = "#B3B3B3" if supports_vol else "#535353"
 
                 prefix = " > " if is_sel else "   "
                 badge = "● ACTIVE" if is_act else f"  {dtype}"
@@ -116,7 +118,7 @@ class DeviceSelectorWidget(Widget):
                 line.append(prefix, style=Style(color=fg, bgcolor=row_bg, bold=is_sel))
                 line.append(_fit_cell(name, 26) + " ", style=Style(color=fg, bgcolor=row_bg, bold=is_sel or is_act))
                 line.append(_fit_cell(badge, 12) + " ", style=Style(color=meta_fg, bgcolor=row_bg))
-                line.append(f"{vol_str:>4}", style=Style(color="#B3B3B3", bgcolor=row_bg))
+                line.append(f"{vol_str:>4}", style=Style(color=vol_fg, bgcolor=row_bg))
                 out.append_text(line)
                 out.append("\n")
 
@@ -380,7 +382,9 @@ class VibeTuneApp(App[None]):
         if not force and time.monotonic() < self._suppress_poll_until:
             return
         # Prevent hardware speakers (e.g. Echo Dot) that round 50% -> 49% from drifting by 1%
-        if self._user_target_volume is not None:
+        if not state.supports_volume:
+            self._user_target_volume = None
+        elif self._user_target_volume is not None:
             if abs(state.volume_percent - self._user_target_volume) <= 2:
                 state.volume_percent = self._user_target_volume
             else:
@@ -788,6 +792,9 @@ class VibeTuneApp(App[None]):
 
         if char in ("+", "="):
             event.stop()
+            if not self.playback_state.supports_volume:
+                self.retro_footer.set_status_note(f"Volume locked on {self.playback_state.device_name}")
+                return
             self._mark_user_action(4.0)
             base_vol = (
                 self._user_target_volume
@@ -804,6 +811,9 @@ class VibeTuneApp(App[None]):
 
         if char in ("-", "_"):
             event.stop()
+            if not self.playback_state.supports_volume:
+                self.retro_footer.set_status_note(f"Volume locked on {self.playback_state.device_name}")
+                return
             self._mark_user_action(4.0)
             base_vol = (
                 self._user_target_volume
@@ -835,11 +845,18 @@ class VibeTuneApp(App[None]):
     def _on_device_selected(self, chosen: dict[str, Any] | None) -> None:
         if not chosen or not chosen.get("id"):
             return
+        self._user_target_volume = None
         dev_id = str(chosen["id"])
         dev_name = str(chosen.get("name") or "Spotify Device")
+        supports_vol = (
+            chosen.get("supports_volume") is not False
+            and chosen.get("volume_percent") is not None
+            and not chosen.get("is_restricted")
+        )
         self._mark_user_action(3.0)
         self.playback_state.device_id = dev_id
         self.playback_state.device_name = dev_name
+        self.playback_state.supports_volume = supports_vol
         if chosen.get("volume_percent") is not None:
             self.playback_state.volume_percent = int(chosen["volume_percent"])
         self.apply_playback_state(self.playback_state)
@@ -887,9 +904,15 @@ class VibeTuneApp(App[None]):
         )
 
     async def _set_volume(self, target_vol: int) -> None:
-        await asyncio.to_thread(
+        result = await asyncio.to_thread(
             self.spotify.adjust_volume,
             target_vol,
             0,
             self.playback_state.device_id,
         )
+        if result is None:
+            self.playback_state.supports_volume = False
+            self._user_target_volume = None
+            self._suppress_poll_until = 0.0
+            self.apply_playback_state(self.playback_state)
+            self.retro_footer.set_status_note(f"Volume locked on {self.playback_state.device_name}")

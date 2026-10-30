@@ -91,6 +91,7 @@ class PlaybackState:
     track: TrackItem | None = None       # The song currently loaded (or None if nothing is playing)
     progress_ms: int = 0                 # How far into the song we are, in milliseconds
     volume_percent: int = 75             # Current volume from 0% (mute) to 100% (max)
+    supports_volume: bool = True         # True if the active device allows remote Web API volume control
     shuffle_state: bool = False          # True if shuffle is turned on
     repeat_state: Literal["off", "context", "track"] = "off"  # Repeat mode: 'off', 'context' (loop all), or 'track' (loop one)
     device_id: str | None = None         # ID of the speaker/phone currently playing

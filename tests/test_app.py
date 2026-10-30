@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from io import BytesIO
 from typing import Any
+from unittest.mock import MagicMock
 from PIL import Image
 import pytest
+from spotipy.exceptions import SpotifyException
 
 from vibetune.app import DeviceSelectorModal, VibeTuneApp
 from vibetune.models import LibraryItem, NOW_PLAYING_QUEUE_ID, PlaybackState, TrackItem
@@ -103,6 +105,7 @@ class FakeSpotifyClient(SpotifyClient):
         self.prev_calls = 0
         self.search_queries: list[str] = []
         self.transferred_to: list[str] = []
+        self.adjust_volume_fails: bool = False
 
     def get_devices(self) -> list[dict[str, Any]]:
         return list(self.devices_list)
@@ -111,6 +114,13 @@ class FakeSpotifyClient(SpotifyClient):
         self.transferred_to.append(device_id)
         self.state.device_id = device_id
         self.state.device_name = device_name
+        for d in self.devices_list:
+            if d.get("id") == device_id:
+                if d.get("volume_percent") is not None:
+                    self.state.volume_percent = int(d["volume_percent"])
+                if d.get("supports_volume") is not None:
+                    self.state.supports_volume = bool(d["supports_volume"])
+                break
         return True
 
     def get_playback_state(self) -> PlaybackState:
@@ -197,7 +207,10 @@ class FakeSpotifyClient(SpotifyClient):
         self.state.progress_ms = max(0, min(duration_ms, current_ms + delta_ms))
         return self.state.progress_ms
 
-    def adjust_volume(self, current_vol: int, delta: int, device_id: str | None = None) -> int:
+    def adjust_volume(self, current_vol: int, delta: int, device_id: str | None = None) -> int | None:
+        if getattr(self, "adjust_volume_fails", False):
+            self.state.supports_volume = False
+            return None
         self.state.volume_percent = max(0, min(100, current_vol + delta))
         return self.state.volume_percent
 
@@ -649,3 +662,251 @@ async def test_external_playback_switch_to_out_of_context_track() -> None:
         assert app.library_pane._active_item_id == NOW_PLAYING_QUEUE_ID
         assert app.tracklist_pane.title == "▶ Now Playing Queue"
         assert app.tracklist_pane.displayed_tracks[0].id == "ext_trk_99"
+
+
+def test_spotify_client_device_supports_volume_and_playback_state() -> None:
+    """SpotifyClient unit tests for _device_supports_volume and get_playback_state:
+    - Verifies device capability checks: supports_volume: False, volume_percent: None,
+      is_restricted: True, and _volume_unsupported_devices set.
+    - When current_playback() returns a phone device with supports_volume: False or
+      volume_percent: None, get_playback_state() returns PlaybackState with
+      supports_volume=False and volume_percent=75.
+    """
+    mock_sp = MagicMock()
+    client = SpotifyClient(sp_client=mock_sp)
+
+    # 1. _device_supports_volume unit checks
+    assert client._device_supports_volume({}) is True
+    assert client._device_supports_volume({"id": "dev_1", "supports_volume": False}) is False
+    assert client._device_supports_volume({"id": "dev_2", "is_restricted": True}) is False
+    assert client._device_supports_volume({"id": "dev_3", "volume_percent": None}) is False
+    assert client._device_supports_volume({"id": "dev_4", "supports_volume": True, "volume_percent": 60}) is True
+
+    client._volume_unsupported_devices.add("dev_cached_blocked")
+    assert client._device_supports_volume({"id": "dev_cached_blocked", "supports_volume": True, "volume_percent": 50}) is False
+
+    # 2. get_playback_state() with phone device having supports_volume: False and volume_percent: None
+    mock_sp.current_playback.return_value = {
+        "is_playing": True,
+        "item": None,
+        "progress_ms": 10_000,
+        "device": {
+            "id": "dev_phone",
+            "name": "Pixel 9 (Earbuds)",
+            "type": "Smartphone",
+            "supports_volume": False,
+            "volume_percent": None,
+        },
+    }
+    state = client.get_playback_state()
+    assert state.supports_volume is False
+    assert state.volume_percent == 75
+    assert state.device_id == "dev_phone"
+    assert state.device_name == "Pixel 9 (Earbuds)"
+
+    # 3. get_playback_state() with phone device having supports_volume: True but volume_percent: None
+    mock_sp.current_playback.return_value = {
+        "is_playing": True,
+        "item": None,
+        "progress_ms": 12_000,
+        "device": {
+            "id": "dev_phone_2",
+            "name": "Pixel 9",
+            "type": "Smartphone",
+            "supports_volume": True,
+            "volume_percent": None,
+        },
+    }
+    state_none_vol = client.get_playback_state()
+    assert state_none_vol.supports_volume is False
+    assert state_none_vol.volume_percent == 75
+
+
+def test_spotify_client_adjust_volume_exception_and_caching() -> None:
+    """SpotifyClient unit tests for adjust_volume SpotifyException rejection:
+    - When sp.volume(...) raises SpotifyException(403, -1, 'Cannot control device volume'),
+      adjust_volume() returns None and records device_id in _volume_unsupported_devices.
+    - Subsequent adjust_volume() and get_playback_state() calls for that device report
+      supports_volume=False / None without retrying the API call.
+    """
+    mock_sp = MagicMock()
+    client = SpotifyClient(sp_client=mock_sp)
+    mock_sp.volume.side_effect = SpotifyException(403, -1, "Cannot control device volume")
+
+    # Initial adjust_volume call fails with 403
+    result = client.adjust_volume(current_vol=75, delta=5, device_id="dev_phone")
+    assert result is None
+    assert "dev_phone" in client._volume_unsupported_devices
+    assert client._last_device_supports_volume is False
+    mock_sp.volume.assert_called_once_with(80, device_id="dev_phone")
+
+    # Subsequent adjust_volume for that device immediately returns None without calling sp.volume again
+    mock_sp.volume.reset_mock()
+    subsequent_result = client.adjust_volume(current_vol=75, delta=-5, device_id="dev_phone")
+    assert subsequent_result is None
+    mock_sp.volume.assert_not_called()
+
+    # Subsequent get_playback_state for that device reports supports_volume=False even if API returns supports_volume: True
+    mock_sp.current_playback.return_value = {
+        "is_playing": True,
+        "item": None,
+        "progress_ms": 25_000,
+        "device": {
+            "id": "dev_phone",
+            "name": "Pixel 9 (Earbuds)",
+            "type": "Smartphone",
+            "supports_volume": True,
+            "volume_percent": 80,
+        },
+    }
+    subsequent_state = client.get_playback_state()
+    assert subsequent_state.supports_volume is False
+
+
+@pytest.mark.asyncio
+async def test_vibetune_app_proactive_volume_lock() -> None:
+    """Integration test: When playback_state.supports_volume is False (e.g. on Pixel 9 (Earbuds)),
+    NowPlayingDeck renders '[--%]' instead of '[75%]', and pressing '+' or '-' does not change
+    volume_percent and updates RetroFooter with 'Volume locked on Pixel 9 (Earbuds)'.
+    """
+    fake_client = FakeSpotifyClient()
+    fake_client.state.device_id = "dev_phone"
+    fake_client.state.device_name = "Pixel 9 (Earbuds)"
+    fake_client.state.supports_volume = False
+    fake_client.state.volume_percent = 75
+
+    app = VibeTuneApp(spotify_client=fake_client, enable_polling=True)
+
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+
+        # Proactive volume lock display verification
+        assert app.playback_state.supports_volume is False
+        rendered_deck = app.now_playing.render().plain
+        assert "[--%]" in rendered_deck
+        assert "[75%]" not in rendered_deck
+
+        # Press '+' to try increasing volume -> locked notice in footer
+        await pilot.press("+")
+        await pilot.pause()
+        assert app.playback_state.volume_percent == 75
+        assert app.retro_footer._status_note == "Volume locked on Pixel 9 (Earbuds)"
+        assert "Volume locked on Pixel 9 (Earbuds)" in app.retro_footer.render().plain
+
+        # Press '-' to try decreasing volume -> volume unchanged, locked notice in footer
+        await pilot.press("-")
+        await pilot.pause()
+        assert app.playback_state.volume_percent == 75
+        assert app.retro_footer._status_note == "Volume locked on Pixel 9 (Earbuds)"
+        assert "[--%]" in app.now_playing.render().plain
+
+
+@pytest.mark.asyncio
+async def test_vibetune_app_reactive_volume_lock_api_rejection() -> None:
+    """Integration test: When supports_volume starts as True, pressing '+' calls adjust_volume;
+    if adjust_volume returns None, VibeTuneApp immediately transitions playback_state.supports_volume
+    to False, renders '[--%]' in NowPlayingDeck, and sets the footer notice to 'Volume locked on ...'.
+    """
+    fake_client = FakeSpotifyClient()
+    fake_client.state.device_id = "dev_phone"
+    fake_client.state.device_name = "Pixel 9 (Earbuds)"
+    fake_client.state.supports_volume = True
+    fake_client.state.volume_percent = 75
+    fake_client.adjust_volume_fails = True
+
+    app = VibeTuneApp(spotify_client=fake_client, enable_polling=True)
+
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+
+        assert app.playback_state.supports_volume is True
+        assert "[75%]" in app.now_playing.render().plain
+
+        # Press '+' -> triggers _set_volume worker which gets None and reacts by locking volume
+        await pilot.press("+")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert app.playback_state.supports_volume is False
+        assert "[--%]" in app.now_playing.render().plain
+        assert app.retro_footer._status_note == "Volume locked on Pixel 9 (Earbuds)"
+        assert "Volume locked on Pixel 9 (Earbuds)" in app.retro_footer.render().plain
+
+
+@pytest.mark.asyncio
+async def test_vibetune_app_device_switch_restores_volume_control() -> None:
+    """Integration test: Opening DeviceSelectorModal ('d') and switching from a volume-locked phone
+    (supports_volume: False, volume_percent: None) to Ashraful's Echo Dot (supports_volume: True,
+    volume_percent: 50) updates playback_state.supports_volume to True, displays '[50%]', and allows
+    '+'/'-' to adjust volume to 55%.
+    """
+    fake_client = FakeSpotifyClient()
+    fake_client.devices_list = [
+        {
+            "id": "dev_phone",
+            "name": "Pixel 9 (Earbuds)",
+            "type": "Smartphone",
+            "is_active": True,
+            "supports_volume": False,
+            "volume_percent": None,
+        },
+        {
+            "id": "dev_echo",
+            "name": "Ashraful's Echo Dot",
+            "type": "Speaker",
+            "is_active": False,
+            "supports_volume": True,
+            "volume_percent": 50,
+        },
+    ]
+    fake_client.state.device_id = "dev_phone"
+    fake_client.state.device_name = "Pixel 9 (Earbuds)"
+    fake_client.state.supports_volume = False
+    fake_client.state.volume_percent = 75
+
+    app = VibeTuneApp(spotify_client=fake_client, enable_polling=True)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+
+        # Initial state is volume locked on phone
+        assert app.playback_state.supports_volume is False
+        assert "[--%]" in app.now_playing.render().plain
+
+        # Open DeviceSelectorModal with 'd'
+        await pilot.press("d")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        assert isinstance(app.screen, DeviceSelectorModal)
+
+        # Move selection to Ashraful's Echo Dot and press Enter to connect
+        await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+
+        # Modal closed and state updated to Echo Dot with volume control restored
+        assert not isinstance(app.screen, DeviceSelectorModal)
+        assert app.playback_state.device_id == "dev_echo"
+        assert app.playback_state.device_name == "Ashraful's Echo Dot"
+        assert app.playback_state.supports_volume is True
+        assert app.playback_state.volume_percent == 50
+        assert "[50%]" in app.now_playing.render().plain
+        assert fake_client.transferred_to == ["dev_echo"]
+
+        # Press '+' to adjust volume up to 55%
+        await pilot.press("+")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        assert app.playback_state.volume_percent == 55
+        assert "[55%]" in app.now_playing.render().plain
+        assert app.retro_footer._status_note == "Volume: 55%"
+
+        # Press '-' to adjust volume back down to 50%
+        await pilot.press("-")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        assert app.playback_state.volume_percent == 50
+        assert "[50%] " in app.now_playing.render().plain or "[50%]" in app.now_playing.render().plain
+        assert app.retro_footer._status_note == "Volume: 50%"
