@@ -304,17 +304,19 @@ class NowPlayingDeck(Widget):
     def _build_modes_line(self, avail_w: int, state: PlaybackState) -> Text:
         shuf_style = "bold #1DB954" if state.shuffle_state else "#B3B3B3"
         rep_style = "bold #1DB954" if state.repeat_state != "off" else "#B3B3B3"
+        vol_badge = f"[{state.volume_percent}%]" if state.supports_volume else "[--%]"
+        vol_style = "bold #FFFFFF" if state.supports_volume else "#535353"
         line = Text(no_wrap=True)
         if avail_w >= 26:
             line.append("🔀 ")
             line.append(f"[s:{state.shuffle_label}]", style=shuf_style)
             line.append(" 🔁 ")
             line.append(f"[r:{state.repeat_label}]", style=rep_style)
-            line.append(f" [{state.volume_percent}%]", style="bold #FFFFFF")
+            line.append(f" {vol_badge}", style=vol_style)
         else:
             line.append(f"[s:{state.shuffle_label}] ", style=shuf_style)
             line.append(f"[r:{state.repeat_label}] ", style=rep_style)
-            line.append(f"[{state.volume_percent}%]", style="bold #FFFFFF")
+            line.append(vol_badge, style=vol_style)
         return _crop_text_line(line, avail_w)
 
     def _build_ctrl_line(self, avail_w: int, is_playing: bool) -> Text:

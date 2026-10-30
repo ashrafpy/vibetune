@@ -168,6 +168,8 @@ class SpotifyClient:
         self._analysis_lock = threading.Lock()
         self._last_device_id: str | None = None
         self._last_device_name: str = "No Active Device"
+        self._last_device_supports_volume: bool = True
+        self._volume_unsupported_devices: set[str] = set()
         self.auth_error: str | None = None
 
     def _load_env(self, env_path: Path | None = None) -> None:
@@ -229,6 +231,19 @@ class SpotifyClient:
                 self.auth_error = str(exc)
                 return None
 
+    def _device_supports_volume(self, device: dict[str, Any]) -> bool:
+        """Return True if the Spotify Connect device supports remote volume control."""
+        if not device:
+            return self._last_device_supports_volume
+        dev_id = device.get("id")
+        if dev_id and dev_id in self._volume_unsupported_devices:
+            return False
+        if device.get("supports_volume") is False or device.get("is_restricted"):
+            return False
+        if "volume_percent" in device and device.get("volume_percent") is None:
+            return False
+        return True
+
     def ensure_device_id(self) -> str | None:
         """Return active Spotify Connect device_id, preferring active or phone devices.
         
@@ -247,17 +262,20 @@ class SpotifyClient:
                 if dev.get("is_active") and dev.get("id"):
                     self._last_device_id = dev["id"]
                     self._last_device_name = dev.get("name", "Spotify Device")
+                    self._last_device_supports_volume = self._device_supports_volume(dev)
                     return self._last_device_id
 
             for dev in devices:
                 if (dev.get("type") or "").lower() == "smartphone" and dev.get("id"):
                     self._last_device_id = dev["id"]
                     self._last_device_name = dev.get("name", "Phone")
+                    self._last_device_supports_volume = self._device_supports_volume(dev)
                     return self._last_device_id
 
             first = devices[0]
             self._last_device_id = first.get("id")
             self._last_device_name = first.get("name", "Spotify Device")
+            self._last_device_supports_volume = self._device_supports_volume(first)
             return self._last_device_id
         except (SpotifyException, KeyError, TypeError) as exc:
             log.debug("Device lookup failed: %s", exc)
@@ -323,6 +341,7 @@ class SpotifyClient:
                     is_playing=False,
                     device_id=dev_id,
                     device_name=self._last_device_name,
+                    supports_volume=self._last_device_supports_volume,
                 )
 
             device = playback.get("device") or {}
@@ -331,6 +350,9 @@ class SpotifyClient:
             if dev_id:
                 self._last_device_id = dev_id
                 self._last_device_name = dev_name
+
+            supports_volume = self._device_supports_volume(device) if device else self._last_device_supports_volume
+            self._last_device_supports_volume = supports_volume
 
             context = playback.get("context") or {}
             context_uri = context.get("uri")
@@ -349,6 +371,7 @@ class SpotifyClient:
                 track=track,
                 progress_ms=int(playback.get("progress_ms") or 0),
                 volume_percent=int(volume),
+                supports_volume=supports_volume,
                 shuffle_state=bool(playback.get("shuffle_state", False)),
                 repeat_state=str(playback.get("repeat_state") or "off"),
                 device_id=dev_id,
@@ -361,6 +384,7 @@ class SpotifyClient:
                 is_playing=False,
                 device_id=self._last_device_id,
                 device_name=self._last_device_name,
+                supports_volume=self._last_device_supports_volume,
             )
 
     def toggle_play_pause(self, state: PlaybackState) -> bool:
@@ -408,15 +432,25 @@ class SpotifyClient:
             log.warning("Seek failed: %s", exc)
         return target_ms
 
-    def adjust_volume(self, current_vol: int, delta: int, device_id: str | None = None) -> int:
-        """Raise or lower speaker volume by 5% ('+' and '-' keys)."""
+    def adjust_volume(self, current_vol: int, delta: int, device_id: str | None = None) -> int | None:
+        """Raise or lower speaker volume by 5% ('+' and '-' keys). Returns None if unsupported."""
         target_vol = max(0, min(100, current_vol + delta))
         if not self.sp:
             return target_vol
+        target_device = device_id or self.ensure_device_id()
+        if target_device and target_device in self._volume_unsupported_devices:
+            return None
         try:
-            self.sp.volume(target_vol, device_id=device_id or self.ensure_device_id())
+            self.sp.volume(target_vol, device_id=target_device)
+            if target_device:
+                self._volume_unsupported_devices.discard(target_device)
+            self._last_device_supports_volume = True
         except SpotifyException as exc:
             log.warning("Volume adjust failed: %s", exc)
+            if target_device:
+                self._volume_unsupported_devices.add(target_device)
+            self._last_device_supports_volume = False
+            return None
         return target_vol
 
     def toggle_shuffle(self, current_shuffle: bool, device_id: str | None = None) -> bool:
