@@ -96,6 +96,7 @@ class PlaybackState:
     repeat_state: Literal["off", "context", "track"] = "off"  # Repeat mode: 'off', 'context' (loop all), or 'track' (loop one)
     device_id: str | None = None         # ID of the speaker/phone currently playing
     device_name: str = "No Active Device"# Human-friendly name of the speaker/phone
+    is_local_device: bool = False        # True when playback is running on the embedded local engine
     tempo_bpm: float = 120.0             # Speed of the song in beats per minute
 
     @property

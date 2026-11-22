@@ -22,6 +22,7 @@ from textual import events
 from textual.widget import Widget
 
 from vibetune.models import PlaybackState
+from vibetune.widgets._helpers import fit_cell as _fit_cell
 
 # Full Top-Deck art size (wide mode): 14 cols x 7 rows = 28x21 subpixels
 WIDE_ART_WIDTH = 14
@@ -61,18 +62,6 @@ def _build_sextant_table() -> tuple[str, ...]:
 
 
 SEXTANT_CHARS = _build_sextant_table()
-
-
-def _fit_cell(text: str, width: int) -> str:
-    """Trim or pad text to fit exact character width in the terminal."""
-    clean = " ".join(text.replace("\xa0", " ").splitlines())
-    if width <= 0:
-        return ""
-    if cell_len(clean) > width:
-        if width == 1:
-            return "…"
-        return set_cell_size(clean, width - 1) + "…"
-    return set_cell_size(clean, width)
 
 
 def _crop_text_line(line: Text, max_cells: int) -> Text:

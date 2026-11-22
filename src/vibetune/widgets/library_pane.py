@@ -9,7 +9,6 @@ This is the left-hand menu of VibeTune:
 
 from __future__ import annotations
 
-from rich.cells import cell_len, set_cell_size
 from rich.style import Style
 from rich.text import Text
 from textual import events
@@ -17,18 +16,7 @@ from textual.message import Message
 from textual.widget import Widget
 
 from vibetune.models import LibraryItem, NOW_PLAYING_QUEUE_ID
-
-
-def _fit_cell(text: str, width: int) -> str:
-    """Trim text to fit the exact width of the sidebar without spilling over."""
-    clean = " ".join(text.replace("\xa0", " ").splitlines())
-    if width <= 0:
-        return ""
-    if cell_len(clean) > width:
-        if width == 1:
-            return "…"
-        return set_cell_size(clean, width - 1) + "…"
-    return set_cell_size(clean, width)
+from vibetune.widgets._helpers import fit_cell as _fit_cell
 
 
 class LibraryPane(Widget):

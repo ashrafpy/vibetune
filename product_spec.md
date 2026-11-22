@@ -4,7 +4,7 @@
 
 **VibeTune** is a lightweight, keyboard-driven terminal Spotify Connect remote player designed specifically for Linux tiling window manager environments (e.g., i3, bspwm, sway, Hyprland).
 
-Unlike heavy official or Electron-based desktop clients that consume significant RAM and CPU, VibeTune operates strictly as a **remote control** using the Spotify Web API. It streams track metadata, library content, and album art directly to the terminal, delegating all actual audio decoding and playback to any active Spotify Connect device (such as a smartphone, smart speaker, tablet, or headless daemon like `spotifyd`).
+Unlike heavy official or Electron-based desktop clients that consume significant RAM and CPU, VibeTune pairs a lightweight Python TUI with a managed **`go-librespot`** local audio engine for direct PipeWire/PulseAudio/ALSA playback, while also acting as a full **Spotify Connect remote** (`d` or `--remote-only`) for phones, tablets, and smart speakers.
 
 ---
 
@@ -27,9 +27,10 @@ Unlike heavy official or Electron-based desktop clients that consume significant
 
 ## 3. Core Features & Capabilities
 
-### 3.1 Featherweight Spotify Connect Remote
-- Communicates directly with the Spotify Web API (`/v1/me/player/*`).
-- Does not decode or stream raw audio locally, maintaining sub-second launch times and low CPU/memory overhead.
+### 3.1 Standalone Local Playback + Spotify Connect Remote
+- Automatically manages a lightweight **`go-librespot`** local audio engine for direct PipeWire/PulseAudio/ALSA playback with zero-latency local REST/WebSocket control.
+- Also communicates directly with the Spotify Web API (`/v1/me/player/*`) to act as a full Spotify Connect remote for phones, smart speakers, and other devices.
+- Gracefully falls back to remote-only mode when `go-librespot` is not installed (or via `--remote-only`).
 - Supports volume adjustment (`+` / `-`), seeking (`←` / `→`), play/pause (`Space`), track skipping (`n` / `p`), shuffle toggle (`s`), and repeat modes (`r`).
 
 ### 3.2 Spotify Connect Device Picker (`d`)
@@ -39,7 +40,7 @@ Unlike heavy official or Electron-based desktop clients that consume significant
 
 ### 3.3 Two-Deck Retro Terminal UI
 - **Top Deck (Media & Visualizer Stage):**
-  - **Left (60%):** 20 FPS spectrum visualizer featuring animated logarithmic frequency bars (`▂▃▄▅▆▇█`) synchronized with track tempo and harmonic beat segments.
+  - **Left (60%):** 20 FPS spectrum visualizer featuring animated logarithmic frequency bands ($60\\text{ Hz}$ to $16\\text{ kHz}$) with live PipeWire/PulseAudio FFT capture (`[LIVE]` badge) during local playback, and automatic fallback to tempo/harmonic synthesis on remote devices.
   - **Right (40%):** High-resolution album cover artwork rendered using Unicode Sextant characters (`U+1FB00`–`U+1FB3B`), paired with track metadata, elapsed/total time scrub bar, and status indicators.
 - **Bottom Deck (Interactive Navigation):**
   - **Library Pane (`[F1]`, 30%):** Lists Liked Songs, Daily Mixes, Saved Playlists, Saved Albums (`◉`), and Followed Artists (`♪`).
@@ -60,10 +61,11 @@ Unlike heavy official or Electron-based desktop clients that consume significant
 ## 4. User Journeys & Interaction Flows
 
 ### 4.1 First-Time Setup & Authentication
-1. User configures Spotify Developer App credentials in `.env.local`.
-2. On first launch (`uv run vibetune`), VibeTune checks for a cached OAuth token in `.spotify_cache`.
+1. User runs `vibetune --setup` (or manually configures credentials in `.env.local`).
+2. On first launch (`vibetune`), VibeTune checks for a cached OAuth token.
 3. If no token exists, VibeTune automatically launches the system web browser to the Spotify authorization page.
 4. Spotify redirects to the local callback (`http://127.0.0.1:8888/callback`), storing the refreshed OAuth token for seamless subsequent startups.
+5. *(Optional)* User runs `vibetune --auth-player` once to authenticate the local `go-librespot` audio engine for standalone playback.
 
 ### 4.2 Playback on Connect Devices
 1. User opens VibeTune in a terminal window.
@@ -83,20 +85,18 @@ Unlike heavy official or Electron-based desktop clients that consume significant
 ## 5. System Requirements & Non-Goals
 
 ### 5.1 System Requirements
-- **Operating System:** Linux (primary), macOS, or Unix-like environments.
+- **Operating System:** Linux, macOS, and Windows (Windows Terminal recommended on Windows).
 - **Python Version:** $\ge 3.11$ (managed via [uv](https://docs.astral.sh/uv/)).
 - **Account:** Active Spotify Premium account (required by Spotify Web API for remote playback endpoints).
-- **Terminal Emulator:** Terminal supporting 24-bit TrueColor and Unicode 13+ glyphs (e.g., Ptyxis, Kitty, WezTerm, Ghostty, Alacritty, Foot, GNOME Terminal).
+- **Terminal Emulator:** Terminal supporting 24-bit TrueColor and Unicode 13+ glyphs (e.g., Ptyxis, Kitty, WezTerm, Ghostty, Alacritty, Foot, iTerm2, Windows Terminal).
 
 ### 5.2 Non-Goals & Explicit Boundaries
-- **No Local Audio Decoding:** VibeTune will not implement local audio decoding, soundcard interfacing, or proprietary DRM decryption. It is purely a remote control.
-- **No Heavy GUI / Mouse Requirement:** While Textual allows mouse clicks, the core product promise is complete, frictionless keyboard control.
-- **No Offline Mode:** Requires an active internet connection to communicate with Spotify Web API endpoints.
+- **No Heavy Electron / GUI Footprint:** VibeTune remains a featherweight terminal client with 100% keyboard-driven navigation.
+- **No Offline Mode:** Requires an active internet connection for Spotify streaming and Web API catalog access.
 
 ---
 
 ## 6. Future Roadmap
 - **Customizable Color Schemes:** User-defined terminal themes (Nord, Gruvbox, Catppuccin, Tokyo Night) via configuration file.
-- **Local Audio Loopback Mode:** Optional visualizer mode reading live frequency data from local PulseAudio/PipeWire monitors when a local sink is playing.
 - **Smart Queue Management:** Dedicated modal or pane to reorder, add, and remove upcoming tracks in the Spotify playback queue.
 - **Global Media Key Integration:** Optional D-Bus / MPRIS2 daemon listener allowing desktop media keys to control VibeTune in the background.

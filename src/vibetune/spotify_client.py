@@ -12,7 +12,7 @@ cloud servers:
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Iterator
 import hashlib
 import json
@@ -37,6 +37,7 @@ from vibetune.models import (
     PlaybackState,
     TrackItem,
 )
+from vibetune.paths import get_config_dir, get_spotify_cache_path
 
 # Silence chatty network logging so terminal output stays clean and readable
 logging.getLogger("spotipy").setLevel(logging.CRITICAL)
@@ -159,12 +160,19 @@ class SpotifyClient:
     4. Fetching Songs: Downloading your playlists and album details in smooth background batches.
     """
 
-    def __init__(self, env_path: Path | None = None, sp_client: spotipy.Spotify | None = None) -> None:
+    def __init__(
+        self,
+        env_path: Path | None = None,
+        sp_client: spotipy.Spotify | None = None,
+        preferred_device_name: str | None = None,
+    ) -> None:
         # Load your Spotify credentials (Client ID and Secret) from .env.local
         self._load_env(env_path)
         self._sp: spotipy.Spotify | None = sp_client
+        self._preferred_device_name: str | None = preferred_device_name
         self._sp_lock = threading.Lock()
-        self._analysis_cache: dict[str, tuple[float, list[AudioSegment]]] = {}
+        self._analysis_cache: OrderedDict[str, tuple[float, list[AudioSegment]]] = OrderedDict()
+        self._max_analysis_cache: int = 64
         self._analysis_lock = threading.Lock()
         self._last_device_id: str | None = None
         self._last_device_name: str = "No Active Device"
@@ -173,17 +181,22 @@ class SpotifyClient:
         self.auth_error: str | None = None
 
     def _load_env(self, env_path: Path | None = None) -> None:
-        """Search the disk for the .env.local or .env file containing Spotify keys."""
-        candidates = []
+        """Search local and user configuration directories for Spotify credentials."""
+        candidates: list[Path] = []
         if env_path:
             candidates.append(env_path)
+        config_dir = get_config_dir()
         candidates.extend(
             [
                 Path.cwd() / ".env.local",
                 Path.cwd() / ".env",
-                Path(__file__).resolve().parents[2] / ".env.local",
+                config_dir / ".env",
+                config_dir / ".env.local",
             ]
         )
+        resolved = Path(__file__).resolve()
+        if len(resolved.parents) > 2:
+            candidates.append(resolved.parents[2] / ".env.local")
         for path in candidates:
             if path.is_file():
                 load_dotenv(dotenv_path=path, override=False)
@@ -195,7 +208,7 @@ class SpotifyClient:
         
         Checks if we're already logged in. If not, reads your keys and opens
         your web browser to let you grant permission, then saves a temporary
-        login pass (token) in `.spotify_cache` so you don't have to log in again.
+        login pass (token) in the Spotify cache file so you don't have to log in again.
         """
         if self._sp is not None:
             return self._sp
@@ -209,10 +222,14 @@ class SpotifyClient:
             redirect_uri = os.getenv("SPOTIPY_REDIRECT_URI", "http://127.0.0.1:8888/callback")
 
             if not client_id or not client_secret:
-                self.auth_error = "Missing SPOTIPY_CLIENT_ID or SPOTIPY_CLIENT_SECRET in .env.local"
+                self.auth_error = (
+                    "Missing Spotify credentials — run 'vibetune --setup' "
+                    "or set SPOTIPY_CLIENT_ID & SPOTIPY_CLIENT_SECRET"
+                )
                 return None
 
-            cache_path = Path.cwd() / ".spotify_cache"
+            cache_path = get_spotify_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 cache_handler = CacheFileHandler(cache_path=str(cache_path))
                 auth_manager = SpotifyOAuth(
@@ -264,6 +281,15 @@ class SpotifyClient:
                     self._last_device_name = dev.get("name", "Spotify Device")
                     self._last_device_supports_volume = self._device_supports_volume(dev)
                     return self._last_device_id
+
+            if self._preferred_device_name:
+                pref_lower = self._preferred_device_name.lower()
+                for dev in devices:
+                    if (dev.get("name") or "").lower() == pref_lower and dev.get("id"):
+                        self._last_device_id = dev["id"]
+                        self._last_device_name = dev.get("name", self._preferred_device_name)
+                        self._last_device_supports_volume = self._device_supports_volume(dev)
+                        return self._last_device_id
 
             for dev in devices:
                 if (dev.get("type") or "").lower() == "smartphone" and dev.get("id"):
@@ -829,7 +855,7 @@ class SpotifyClient:
                     offset += len(rows)
                     if len(rows) < 50:
                         break
-            except SpotifyException:
+            except (SpotifyException, httpx.HTTPError, KeyError, ValueError):
                 yielded_any = False
                 for batch in self._iter_public_playlist_batches(item.id, item.uri, batch_size=100):
                     yielded_any = True
@@ -840,8 +866,6 @@ class SpotifyClient:
                         t.context_uri = item.uri
                     if fallback:
                         yield fallback
-            except (httpx.HTTPError, KeyError, ValueError) as exc:
-                log.warning("Playlist fallback fetch failed: %s", exc)
 
         elif item.item_type == "artist":
             clean_artist = item.name.lstrip("♪ ").strip()
@@ -1064,4 +1088,6 @@ class SpotifyClient:
 
         with self._analysis_lock:
             self._analysis_cache[track_id] = (tempo, segments)
+            while len(self._analysis_cache) > self._max_analysis_cache:
+                self._analysis_cache.popitem(last=False)
         return tempo, segments
