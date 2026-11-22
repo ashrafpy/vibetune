@@ -20,6 +20,7 @@ from rich.text import Text
 from textual import events, on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widget import Widget
 
@@ -351,7 +352,7 @@ class VibeTuneApp(App[None]):
         try:
             self.visualizer.advance_frame(0.05)
             self.now_playing.advance_progress(50)
-        except (AttributeError, TypeError):
+        except (AttributeError, TypeError, NoMatches):
             pass
 
     async def _initial_load(self) -> None:
@@ -444,7 +445,7 @@ class VibeTuneApp(App[None]):
                 tempo_bpm=state.tempo_bpm,
                 segments=segments,
             )
-        except (AttributeError, TypeError, KeyError):
+        except (AttributeError, TypeError, KeyError, NoMatches):
             pass
 
     async def _load_library(self) -> None:
