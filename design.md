@@ -63,9 +63,10 @@ By keeping the Top Deck display-only and controlled via global hotkeys, the keyb
 ### 3.1 Top Deck: Media & Visualizer Stage (`~35-40%` Viewport Height)
 
 * **Left: Audio Spectrum Visualizer (`60%` Width)**
-  * Displays 24–48 logarithmic frequency bands ($60\text{ Hz}$ to $16\text{ kHz}$) using Unicode block glyphs: ` `, `▂`, `▃`, `▄`, `▅`, `▆`, `▇`, `█`.
+  * Displays 12–160 logarithmic frequency bands ($60\text{ Hz}$ to $16\text{ kHz}$) using Unicode block glyphs: ` `, `▂`, `▃`, `▄`, `▅`, `▆`, `▇`, `█`. Band count scales dynamically to terminal width.
   * Runs at a steady 20 FPS refresh rate.
-  * When track audio features and harmonic segments are retrieved from Spotify's API, the visualizer modulates peak heights and danceability rhythms to match the song's live tempo and energy.
+  * During local `go-librespot` playback on Linux, captures live audio via `parec` (PipeWire/PulseAudio monitor) and renders real-time Hann-windowed FFT magnitudes with a `[LIVE]` badge.
+  * When live FFT is unavailable or playback is on a remote Spotify Connect device, falls back seamlessly to a tempo/harmonic synthesizer driven by deterministic track-seeded beat segments.
 * **Right: Now Playing & Controls (`40%` Width)**
   * **Unicode Sextant Album Art:** Renders high-resolution album covers using $2 \times 3$ Unicode Sextant subpixel partitioning (`U+1FB00`–`U+1FB3B`) with 24-bit TrueColor ANSI escape sequences. Automatically toggles between compact ($12 \times 6$) and standard ($20 \times 10$) cell footprints based on terminal width.
   * **Metadata:** Track title, artist, album name, and release year with automatic overflow truncation.

@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
-from rich.cells import cell_len, set_cell_size
+from rich.cells import cell_len
 from rich.style import Style
 from rich.text import Text
 from textual import events, on
@@ -24,24 +24,15 @@ from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widget import Widget
 
+from vibetune.audio_capture import LiveAudioSpectrum
+from vibetune.local_player import LocalPlayerDaemon
 from vibetune.models import LibraryItem, NOW_PLAYING_QUEUE_ID, PlaybackState, TrackItem
 from vibetune.spotify_client import SpotifyClient
+from vibetune.widgets._helpers import fit_cell as _fit_cell
 from vibetune.widgets.library_pane import LibraryPane
 from vibetune.widgets.now_playing import NowPlayingDeck
 from vibetune.widgets.tracklist_pane import TracklistPane
 from vibetune.widgets.visualizer import SpectrumVisualizer
-
-
-def _fit_cell(text: str, width: int) -> str:
-    """Trim text with an ellipsis (…) so it fits neatly into terminal columns without wrapping."""
-    clean = " ".join(text.replace("\xa0", " ").splitlines())
-    if width <= 0:
-        return ""
-    if cell_len(clean) > width:
-        if width == 1:
-            return "…"
-        return set_cell_size(clean, width - 1) + "…"
-    return set_cell_size(clean, width)
 
 
 class DeviceSelectorWidget(Widget):
@@ -57,11 +48,13 @@ class DeviceSelectorWidget(Widget):
         self,
         devices: list[dict[str, Any]],
         active_device_id: str | None = None,
+        local_device_name: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._devices = devices
         self._active_device_id = active_device_id
+        self._local_device_name = local_device_name
         self._selected_idx = 0
         for idx, dev in enumerate(devices):
             if dev.get("id") == active_device_id or dev.get("is_active"):
@@ -110,7 +103,14 @@ class DeviceSelectorWidget(Widget):
                 vol_fg = "#B3B3B3" if supports_vol else "#535353"
 
                 prefix = " > " if is_sel else "   "
-                badge = "● ACTIVE" if is_act else f"  {dtype}"
+                is_local = bool(
+                    self._local_device_name
+                    and name.lower() == self._local_device_name.lower()
+                )
+                if is_local:
+                    badge = "● LOCAL" if is_act else "  LOCAL"
+                else:
+                    badge = "● ACTIVE" if is_act else f"  {dtype}"
                 row_bg = "#282828" if is_sel else None
                 fg = "#1DB954" if (is_sel or is_act) else "#FFFFFF"
                 meta_fg = "#1DB954" if is_act else "#B3B3B3"
@@ -147,11 +147,13 @@ class DeviceSelectorModal(ModalScreen[dict[str, Any] | None]):
         spotify_client: SpotifyClient,
         active_device_id: str | None = None,
         initial_devices: list[dict[str, Any]] | None = None,
+        local_device_name: str | None = None,
     ) -> None:
         super().__init__()
         self._spotify = spotify_client
         self._active_device_id = active_device_id
         self._initial_devices = initial_devices or []
+        self._local_device_name = local_device_name
 
     def compose(self) -> ComposeResult:
         with Vertical(id="device-modal") as modal:
@@ -159,6 +161,7 @@ class DeviceSelectorModal(ModalScreen[dict[str, Any] | None]):
             yield DeviceSelectorWidget(
                 self._initial_devices,
                 active_device_id=self._active_device_id,
+                local_device_name=self._local_device_name,
                 id="device-list-widget",
             )
 
@@ -270,11 +273,16 @@ class VibeTuneApp(App[None]):
         self,
         spotify_client: SpotifyClient | None = None,
         enable_polling: bool = True,
+        local_player: LocalPlayerDaemon | None = None,
+        audio_spectrum: LiveAudioSpectrum | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.spotify = spotify_client or SpotifyClient()
         self._enable_polling = enable_polling
+        self._local_player = local_player
+        self._audio_spectrum = audio_spectrum
+        self._local_engine_ready: bool = False
         self.playback_state = PlaybackState()
         self.search_mode = False
         self._active_context_uri: str | None = None
@@ -333,13 +341,112 @@ class VibeTuneApp(App[None]):
         Starts two clocks:
         1. A fast 20 FPS clock (every 0.05s) to animate the visualizer and smooth the scrub bar.
         2. A slower clock (every 2.0s) to ask Spotify if the song changed.
+        Also boots the embedded local playback engine (`go-librespot`) when configured.
         """
         self.library_pane.focus()
+        if self._audio_spectrum is not None:
+            self.visualizer.set_live_spectrum_provider(self._audio_spectrum)
         # 20 FPS timer for visualizer & smooth progress bar interpolation
         self.set_interval(0.05, self._on_animation_tick)
+        if self._local_player is not None:
+            self.run_worker(self._start_local_player(), group="local_engine", exclusive=True)
         if self._enable_polling:
             self.set_interval(2.0, self._poll_playback_worker)
             self.run_worker(self._initial_load(), exclusive=False)
+
+    async def on_unmount(self) -> None:
+        """Cleanly shut down live FFT capture and the local playback daemon."""
+        if self._audio_spectrum is not None:
+            self._audio_spectrum.stop()
+        if self._local_player is not None:
+            await self._local_player.stop()
+
+    def _is_using_local_player(self) -> bool:
+        return bool(
+            self._local_player is not None
+            and self._local_engine_ready
+            and self.playback_state.is_local_device
+        )
+
+    def _sync_live_fft_state(self) -> None:
+        if self._audio_spectrum is None or not self.is_mounted:
+            return
+        try:
+            if self.playback_state.is_local_device and self.playback_state.is_playing:
+                if not self._audio_spectrum.is_running:
+                    self._audio_spectrum.start()
+                self.visualizer.set_live_mode(self._audio_spectrum.is_running)
+            else:
+                self.visualizer.set_live_mode(False)
+                if not self.playback_state.is_local_device and self._audio_spectrum.is_running:
+                    self._audio_spectrum.stop()
+        except (AttributeError, TypeError, NoMatches):
+            pass
+
+    async def _start_local_player(self) -> None:
+        if self._local_player is None:
+            return
+        ok = await self._local_player.start()
+        if not self.is_mounted:
+            return
+        if not ok:
+            if self._local_player.last_error:
+                self.retro_footer.set_status_note(self._local_player.last_error)
+            return
+
+        self._local_engine_ready = True
+        local_state = await self._local_player.client.get_playback_state()
+        if not self.is_mounted:
+            return
+
+        if local_state is not None and (
+            local_state.is_playing
+            or self.playback_state.track is None
+            or self.playback_state.device_name == "No Active Device"
+        ):
+            self.apply_playback_state(local_state)
+            self.retro_footer.set_status_note(
+                f"Local engine ready: {self._local_player.config.device_name}"
+            )
+        elif (
+            self.playback_state.device_name.lower()
+            == self._local_player.config.device_name.lower()
+        ):
+            self.playback_state.is_local_device = True
+            self._sync_live_fft_state()
+
+        self.run_worker(self._listen_local_events(), group="local_ws", exclusive=True)
+
+    async def _listen_local_events(self) -> None:
+        if self._local_player is None:
+            return
+        refresh_events = {
+            "playing",
+            "paused",
+            "stopped",
+            "not_playing",
+            "will_play",
+            "seek",
+            "volume",
+            "shuffle_context",
+            "repeat_context",
+            "repeat_track",
+            "active",
+        }
+        async for event in self._local_player.client.iter_events():
+            if not self.is_mounted or not self._local_engine_ready:
+                break
+            ev_type = str(event.get("type") or "")
+            if ev_type == "active":
+                self.playback_state.is_local_device = True
+            elif ev_type == "inactive":
+                self.playback_state.is_local_device = False
+                self._sync_live_fft_state()
+                continue
+            if ev_type in refresh_events and self.playback_state.is_local_device:
+                local_state = await self._local_player.client.get_playback_state()
+                if local_state is not None and self.is_mounted:
+                    self.apply_playback_state(local_state)
 
     def _mark_user_action(self, cooldown_sec: float = 2.6) -> None:
         """Suppress background playback polling briefly so optimistic UI updates never bounce."""
@@ -376,10 +483,20 @@ class VibeTuneApp(App[None]):
         self.run_worker(self._refresh_playback_state(force=False), exclusive=False)
 
     async def _refresh_playback_state(self, force: bool = False) -> None:
-        """Ask Spotify for current track & progress, then update the screen."""
+        """Ask Spotify (or the local go-librespot engine) for current track & progress."""
         if not force and time.monotonic() < self._suppress_poll_until:
             return
-        state = await asyncio.to_thread(self.spotify.get_playback_state)
+        state: PlaybackState | None = None
+        if self._is_using_local_player() and self._local_player is not None:
+            state = await self._local_player.client.get_playback_state()
+        if state is None:
+            state = await asyncio.to_thread(self.spotify.get_playback_state)
+            if (
+                self._local_player is not None
+                and self._local_engine_ready
+                and state.device_name.lower() == self._local_player.config.device_name.lower()
+            ):
+                state.is_local_device = True
         if not force and time.monotonic() < self._suppress_poll_until:
             return
         # Prevent hardware speakers (e.g. Echo Dot) that round 50% -> 49% from drifting by 1%
@@ -434,6 +551,9 @@ class VibeTuneApp(App[None]):
             playing_id = state.track.id if state.track else None
             self.tracklist_pane.set_playing_track(playing_id)
 
+            # get_audio_analysis is fast for cached tracks (dict lookup) and
+            # generates deterministic segments for new tracks without network I/O,
+            # so it's safe to call synchronously here.
             segments = None
             if state.track:
                 _, segments = self.spotify.get_audio_analysis(
@@ -445,6 +565,7 @@ class VibeTuneApp(App[None]):
                 tempo_bpm=state.tempo_bpm,
                 segments=segments,
             )
+            self._sync_live_fft_state()
         except (AttributeError, TypeError, KeyError, NoMatches):
             pass
 
@@ -589,13 +710,27 @@ class VibeTuneApp(App[None]):
             self.tracklist_pane.set_tracklist(self._queue_title, self._queue_tracks)
             self.tracklist_pane.set_playing_track(track.id)
 
-        await asyncio.to_thread(
-            self.spotify.play_track,
-            track,
-            effective_context_uri,
-            uris,
-            self.playback_state.device_id,
-        )
+        if self._is_using_local_player() and self._local_player is not None:
+            if (
+                effective_context_uri
+                and effective_context_uri.startswith("spotify:")
+                and ":track:" not in effective_context_uri
+                and ":artist:" not in effective_context_uri
+            ):
+                await self._local_player.client.play(
+                    uri=effective_context_uri,
+                    skip_to_uri=track.uri,
+                )
+            else:
+                await self._local_player.client.play(uri=track.uri)
+        else:
+            await asyncio.to_thread(
+                self.spotify.play_track,
+                track,
+                effective_context_uri,
+                uris,
+                self.playback_state.device_id,
+            )
 
         live_queue = await asyncio.to_thread(self.spotify.get_playback_queue, track, event.all_tracks)
         if live_queue and self.is_mounted:
@@ -836,10 +971,16 @@ class VibeTuneApp(App[None]):
 
     def open_device_selector(self, initial_devices: list[dict[str, Any]] | None = None) -> None:
         """Push the modal dialog allowing the user to pick a Spotify Connect device."""
+        local_name = (
+            self._local_player.config.device_name
+            if self._local_player is not None and self._local_engine_ready
+            else None
+        )
         modal = DeviceSelectorModal(
             self.spotify,
             active_device_id=self.playback_state.device_id,
             initial_devices=initial_devices,
+            local_device_name=local_name,
         )
         self.push_screen(modal, self._on_device_selected)
 
@@ -849,14 +990,24 @@ class VibeTuneApp(App[None]):
         self._user_target_volume = None
         dev_id = str(chosen["id"])
         dev_name = str(chosen.get("name") or "Spotify Device")
+        is_local = bool(
+            self._local_player is not None
+            and self._local_engine_ready
+            and dev_name.lower() == self._local_player.config.device_name.lower()
+        )
         supports_vol = (
-            chosen.get("supports_volume") is not False
-            and chosen.get("volume_percent") is not None
-            and not chosen.get("is_restricted")
+            True
+            if is_local
+            else (
+                chosen.get("supports_volume") is not False
+                and chosen.get("volume_percent") is not None
+                and not chosen.get("is_restricted")
+            )
         )
         self._mark_user_action(3.0)
         self.playback_state.device_id = dev_id
         self.playback_state.device_name = dev_name
+        self.playback_state.is_local_device = is_local
         self.playback_state.supports_volume = supports_vol
         if chosen.get("volume_percent") is not None:
             self.playback_state.volume_percent = int(chosen["volume_percent"])
@@ -869,19 +1020,38 @@ class VibeTuneApp(App[None]):
         )
 
     async def _toggle_play_pause(self, prior_state: PlaybackState) -> None:
+        if self._is_using_local_player() and self._local_player is not None:
+            if prior_state.is_playing:
+                await self._local_player.client.pause()
+            else:
+                await self._local_player.client.resume()
+            return
         await asyncio.to_thread(self.spotify.toggle_play_pause, prior_state)
 
     async def _skip_next(self) -> None:
+        if self._is_using_local_player() and self._local_player is not None:
+            await self._local_player.client.next_track()
+            await asyncio.sleep(0.15)
+            await self._refresh_playback_state(force=True)
+            return
         await asyncio.to_thread(self.spotify.next_track, self.playback_state.device_id)
         await asyncio.sleep(0.45)
         await self._refresh_playback_state(force=True)
 
     async def _skip_previous(self) -> None:
+        if self._is_using_local_player() and self._local_player is not None:
+            await self._local_player.client.previous_track()
+            await asyncio.sleep(0.15)
+            await self._refresh_playback_state(force=True)
+            return
         await asyncio.to_thread(self.spotify.previous_track, self.playback_state.device_id)
         await asyncio.sleep(0.45)
         await self._refresh_playback_state(force=True)
 
     async def _toggle_shuffle(self, prior_shuf: bool) -> None:
+        if self._is_using_local_player() and self._local_player is not None:
+            await self._local_player.client.set_shuffle(not prior_shuf)
+            return
         await asyncio.to_thread(
             self.spotify.toggle_shuffle,
             prior_shuf,
@@ -889,6 +1059,9 @@ class VibeTuneApp(App[None]):
         )
 
     async def _cycle_repeat(self, prior_rep: str) -> None:
+        if self._is_using_local_player() and self._local_player is not None:
+            await self._local_player.client.set_repeat(self.playback_state.repeat_state)
+            return
         await asyncio.to_thread(
             self.spotify.cycle_repeat,
             prior_rep,
@@ -896,6 +1069,9 @@ class VibeTuneApp(App[None]):
         )
 
     async def _seek_to(self, target_ms: int, dur: int) -> None:
+        if self._is_using_local_player() and self._local_player is not None:
+            await self._local_player.client.seek(target_ms, relative=False)
+            return
         await asyncio.to_thread(
             self.spotify.seek_relative,
             target_ms,
@@ -905,6 +1081,9 @@ class VibeTuneApp(App[None]):
         )
 
     async def _set_volume(self, target_vol: int) -> None:
+        if self._is_using_local_player() and self._local_player is not None:
+            await self._local_player.client.set_volume(target_vol)
+            return
         result = await asyncio.to_thread(
             self.spotify.adjust_volume,
             target_vol,

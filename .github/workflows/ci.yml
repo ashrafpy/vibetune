@@ -1,0 +1,90 @@
+name: Cross-Platform CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-and-build:
+    name: ${{ matrix.os }} (Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run test suite
+        run: uv run --python "${{ matrix.python-version }}" --extra dev pytest -v
+
+      - name: Build distribution packages and verify wheel contents
+        shell: bash
+        run: |
+          uv build --out-dir dist-ci
+          python -c '
+          import glob, zipfile
+          wheels = glob.glob("dist-ci/*.whl")
+          assert len(wheels) == 1, f"Expected 1 wheel, got {wheels}"
+          with zipfile.ZipFile(wheels[0]) as zf:
+              names = set(zf.namelist())
+          for required in ("vibetune/styles.tcss", "vibetune/paths.py", "vibetune/local_player.py", "vibetune/main.py"):
+              assert required in names, f"Missing {required} from wheel: {sorted(names)}"
+          print("Verified wheel:", wheels[0])
+          '
+
+      - name: Test isolated uv tool install from wheel
+        shell: bash
+        run: |
+          WHEEL="$(ls dist-ci/*.whl | head -n 1)"
+          TMPD="$(mktemp -d)"
+          UV_TOOL_DIR="$TMPD/tools" UV_TOOL_BIN_DIR="$TMPD/bin" uv tool install --force --python "${{ matrix.python-version }}" "$WHEEL"
+          cd "$TMPD"
+          "$TMPD/bin/vibetune" --version
+          "$TMPD/bin/vibetune" --help
+
+      - name: Verify POSIX installer (install.sh)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          sh -n install.sh
+          bash -n install.sh
+          WHEEL="$(cd dist-ci && ls "$(pwd)"/*.whl | head -n 1)"
+          TMPD="$(mktemp -d)"
+          UV_TOOL_DIR="$TMPD/tools" \
+          UV_TOOL_BIN_DIR="$TMPD/bin" \
+          VIBETUNE_BIN_DIR="$TMPD/bin" \
+          VIBETUNE_SOURCE="$WHEEL" \
+          VIBETUNE_NO_PLAYER=1 \
+          sh ./install.sh
+          "$TMPD/bin/vibetune" --version
+
+      - name: Verify Windows PowerShell installer (install.ps1)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $errors = $null
+          $tokens = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "install.ps1"), [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.ToString() }
+              exit 1
+          }
+          $wheel = (Get-Item "dist-ci/*.whl" | Select-Object -First 1).FullName
+          $tmpd = Join-Path ([System.IO.Path]::GetTempPath()) ("vt-ci-" + [System.Guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $tmpd -Force | Out-Null
+          $env:UV_TOOL_DIR = Join-Path $tmpd "tools"
+          $env:UV_TOOL_BIN_DIR = Join-Path $tmpd "bin"
+          $env:VIBETUNE_BIN_DIR = Join-Path $tmpd "bin"
+          $env:VIBETUNE_SOURCE = $wheel
+          $env:VIBETUNE_NO_PLAYER = "1"
+          & ./install.ps1
+          & (Join-Path $env:UV_TOOL_BIN_DIR "vibetune.exe") --version
+          Remove-Item -Path $tmpd -Recurse -Force -ErrorAction SilentlyContinue

@@ -14,7 +14,6 @@ This is the main song table on the right side of the screen:
 
 from __future__ import annotations
 
-from rich.cells import cell_len, set_cell_size
 from rich.style import Style
 from rich.text import Text
 from textual import events
@@ -22,23 +21,7 @@ from textual.message import Message
 from textual.widget import Widget
 
 from vibetune.models import TrackItem
-
-
-def _fit_cell(text: str, width: int) -> str:
-    """Pad or truncate `text` to exact terminal display cell `width` (handles CJK & wide glyphs).
-    
-    In terminals, characters like Japanese kanji or emojis take up two spaces instead
-    of one. This function measures the real visual space on screen to make sure
-    columns remain perfectly straight and never wrap around to ruin the layout.
-    """
-    clean = " ".join(text.replace("\xa0", " ").splitlines())
-    if width <= 0:
-        return ""
-    if cell_len(clean) > width:
-        if width == 1:
-            return "…"
-        return set_cell_size(clean, width - 1) + "…"
-    return set_cell_size(clean, width)
+from vibetune.widgets._helpers import fit_cell as _fit_cell
 
 
 class TracklistPane(Widget):

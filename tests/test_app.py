@@ -385,6 +385,13 @@ class EmptyFakeSpotifyClient(SpotifyClient):
     def get_library_items(self) -> list[LibraryItem]:
         return []
 
+    def get_playback_queue(
+        self,
+        current_track: TrackItem | None = None,
+        fallback_tracks: list[TrackItem] | None = None,
+    ) -> list[TrackItem]:
+        return []
+
     def iter_library_track_batches(self, item: LibraryItem, batch_size: int = 50):
         return iter([])
 

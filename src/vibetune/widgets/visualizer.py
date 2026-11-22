@@ -11,11 +11,18 @@ This file creates the dancing equalizer bars in the top-left corner of the scree
 from __future__ import annotations
 
 import math
+from typing import Protocol
 from rich.text import Text
 from textual import events
 from textual.widget import Widget
 
 from vibetune.models import AudioSegment
+
+
+class LiveSpectrumProvider(Protocol):
+    """Protocol for real-time audio spectrum providers (e.g. LiveAudioSpectrum)."""
+
+    def get_bands(self, num_bands: int) -> list[float] | None: ...
 
 # Unicode block characters from lowest (1/8th height) to highest (full block)
 BLOCKS = (" ", "▂", "▃", "▄", "▅", "▆", "▇", "█")
@@ -41,6 +48,23 @@ class SpectrumVisualizer(Widget):
         self._levels: list[float] = [0.05] * MAX_BANDS
         # Highest point reached recently, used for floating peak indicators
         self._peaks: list[float] = [0.08] * MAX_BANDS
+        self._live_provider: LiveSpectrumProvider | None = None
+        self._live_mode: bool = False
+        self._live_signal_active: bool = False
+
+    def set_live_spectrum_provider(self, provider: LiveSpectrumProvider | None) -> None:
+        """Attach a real-time FFT provider (e.g. LiveAudioSpectrum)."""
+        self._live_provider = provider
+        if provider is None:
+            self._live_mode = False
+            self._live_signal_active = False
+
+    def set_live_mode(self, enabled: bool) -> None:
+        """Enable or disable live FFT spectrum mode (falls back to synthesized when False)."""
+        self._live_mode = bool(enabled and self._live_provider is not None)
+        if not self._live_mode:
+            self._live_signal_active = False
+        self.refresh()
 
     def _active_band_count(self) -> int:
         """Determines how many vertical bars can fit across the current terminal width."""
@@ -113,9 +137,17 @@ class SpectrumVisualizer(Widget):
         return self._segments[min(len(self._segments) - 1, max(0, lo))]
 
     def _compute_targets(self, num_bands: int, t_sec: float) -> list[float]:
-        """Calculate target bar heights by combining bass pulse, harmonic wave, and loudness."""
+        """Calculate target bar heights from live FFT audio or synthesized beat/harmonic curves."""
         if not self._is_playing:
+            self._live_signal_active = False
             return [0.04] * num_bands
+
+        if self._live_mode and self._live_provider is not None:
+            live_bands = self._live_provider.get_bands(num_bands)
+            if live_bands and len(live_bands) == num_bands:
+                self._live_signal_active = True
+                return [max(0.05, min(1.0, val)) for val in live_bands]
+        self._live_signal_active = False
 
         seg = self._find_active_segment(t_sec)
         beat_freq = (self._tempo_bpm / 60.0) * math.pi * 2.0
@@ -154,7 +186,10 @@ class SpectrumVisualizer(Widget):
         num_bands = self._active_band_count()
 
         out = Text(no_wrap=True)
-        out.append(" ♫ Spectrum Visualizer\n", style="bold #FFFFFF")
+        out.append(" ♫ Spectrum Visualizer", style="bold #FFFFFF")
+        if self._live_mode and self._live_signal_active:
+            out.append(" [LIVE]", style="bold #1DB954")
+        out.append("\n")
 
         levels = self._levels[:num_bands]
 
